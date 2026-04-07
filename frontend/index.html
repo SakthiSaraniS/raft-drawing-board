@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RAFT Drawing Board</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0F172A; color: #E2E8F0; font-family: Arial, sans-serif;
+           display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+    header { background: #1E293B; padding: 10px 20px; display: flex;
+             justify-content: space-between; align-items: center;
+             border-bottom: 2px solid #0EA5E9; flex-shrink: 0; }
+    .logo { font-size: 1.1rem; font-weight: bold; color: #38BDF8; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%;
+                  background: #22C55E; display: inline-block; margin-right: 6px;
+                  animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .status-dot.offline { background: #EF4444; animation: none; }
+
+    #toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .color-swatch { width: 26px; height: 26px; border-radius: 50%;
+                    border: 2px solid transparent; cursor: pointer;
+                    transition: transform 0.15s; }
+    .color-swatch:hover { transform: scale(1.2); }
+    .color-swatch.active { border-color: #fff; transform: scale(1.15); }
+    .toolbar-label { color: #94A3B8; font-size: 0.8rem; }
+    #brushSize { width: 80px; accent-color: #0EA5E9; }
+    .btn { border: none; border-radius: 6px; padding: 6px 14px;
+           cursor: pointer; font-size: 0.85rem; font-weight: bold; transition: opacity 0.2s; }
+    .btn:hover { opacity: 0.85; }
+    .btn-red { background: #EF4444; color: #fff; }
+    .btn-blue { background: #0EA5E9; color: #fff; }
+
+    #main { display: flex; flex: 1; overflow: hidden; }
+    #canvas-wrap { flex: 1; position: relative; }
+    canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+
+    /* ── DIAGNOSTICS PANEL ── */
+    #diag-panel { width: 0; background: #1E293B; border-left: 2px solid #0EA5E9;
+                  overflow: hidden; transition: width 0.35s ease; flex-shrink: 0;
+                  display: flex; flex-direction: column; }
+    #diag-panel.open { width: 320px; }
+    #diag-inner { width: 320px; padding: 16px; overflow-y: auto; height: 100%; }
+    #diag-inner h2 { color: #38BDF8; font-size: 1rem; margin-bottom: 14px;
+                     border-bottom: 1px solid #334155; padding-bottom: 8px; }
+
+    .replica-card { background: #0F172A; border-radius: 8px; padding: 12px;
+                    margin-bottom: 10px; border-left: 4px solid #334155;
+                    transition: border-color 0.3s; }
+    .replica-card.leader   { border-left-color: #22C55E; }
+    .replica-card.follower { border-left-color: #F59E0B; }
+    .replica-card.candidate{ border-left-color: #A78BFA; }
+    .replica-card.unreachable { border-left-color: #EF4444; opacity: 0.55; }
+
+    .card-title { display: flex; justify-content: space-between; align-items: center; }
+    .replica-name { font-weight: bold; font-size: 0.9rem; color: #E2E8F0; }
+    .badge { font-size: 0.7rem; font-weight: bold; padding: 2px 8px;
+             border-radius: 4px; text-transform: uppercase; }
+    .badge-leader     { background: #166534; color: #86EFAC; }
+    .badge-follower   { background: #78350F; color: #FDE68A; }
+    .badge-candidate  { background: #4C1D95; color: #DDD6FE; }
+    .badge-unreachable{ background: #7F1D1D; color: #FCA5A5; }
+
+    .card-stats { font-size: 0.78rem; color: #94A3B8; margin-top: 6px; line-height: 1.7; }
+    .log-track { background: #1E293B; border-radius: 4px; height: 6px; margin-top: 8px; }
+    .log-fill  { height: 6px; border-radius: 4px; background: #0EA5E9;
+                 transition: width 0.4s ease; }
+
+    .gateway-card { background: #0F172A; border-radius: 8px; padding: 12px;
+                    margin-bottom: 14px; border-left: 4px solid #0EA5E9; }
+    .gateway-card .card-stats { color: #94A3B8; }
+
+    .event-log { background: #0F172A; border-radius: 6px; padding: 8px;
+                 font-size: 0.72rem; font-family: monospace; color: #64748B;
+                 max-height: 160px; overflow-y: auto; margin-top: 14px; }
+    .event-log .event { color: #94A3B8; border-bottom: 1px solid #1E293B;
+                        padding: 3px 0; }
+    .event-log .event.election { color: #A78BFA; }
+    .event-log .event.commit   { color: #4ADE80; }
+    .event-log .event.failover { color: #F87171; }
+
+    #diag-toggle { position: fixed; bottom: 20px; right: 20px;
+                   background: #0EA5E9; color: #fff; border: none; border-radius: 8px;
+                   padding: 10px 16px; cursor: pointer; font-size: 0.85rem; font-weight: bold;
+                   box-shadow: 0 4px 20px rgba(14,165,233,0.5); z-index: 50;
+                   transition: background 0.2s; }
+    #diag-toggle:hover { background: #0284C7; }
+
+    #ws-status { font-size: 0.78rem; color: #94A3B8; display: flex; align-items: center; gap: 6px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🎨 RAFT Drawing Board</div>
+  <div id="toolbar">
+    <span class="toolbar-label">Color:</span>
+    <div class="color-swatch active" style="background:#38BDF8" onclick="setColor('#38BDF8',this)"></div>
+    <div class="color-swatch" style="background:#F472B6" onclick="setColor('#F472B6',this)"></div>
+    <div class="color-swatch" style="background:#4ADE80" onclick="setColor('#4ADE80',this)"></div>
+    <div class="color-swatch" style="background:#FB923C" onclick="setColor('#FB923C',this)"></div>
+    <div class="color-swatch" style="background:#FACC15" onclick="setColor('#FACC15',this)"></div>
+    <div class="color-swatch" style="background:#FFFFFF" onclick="setColor('#FFFFFF',this)"></div>
+    <div class="color-swatch" style="background:#EF4444" onclick="setColor('#EF4444',this)"></div>
+    <span class="toolbar-label" style="margin-left:6px">Size:</span>
+    <input type="range" min="2" max="24" value="4" id="brushSize">
+    <button class="btn btn-red" onclick="clearCanvas()">🗑 Clear</button>
+  </div>
+  <div id="ws-status">
+    <div class="status-dot offline" id="ws-dot"></div>
+    <span id="ws-label">Connecting...</span>
+  </div>
+</header>
+
+<div id="main">
+  <div id="canvas-wrap">
+    <canvas id="board"></canvas>
+  </div>
+  <div id="diag-panel">
+    <div id="diag-inner">
+      <h2>⚙ Cluster Diagnostics</h2>
+      <div class="gateway-card">
+        <div style="font-weight:bold;font-size:0.85rem;color:#38BDF8;margin-bottom:6px">Gateway</div>
+        <div class="card-stats" id="gw-stats">Loading...</div>
+      </div>
+      <div id="replica-list"></div>
+      <div style="color:#94A3B8;font-size:0.78rem;margin-bottom:6px;font-weight:bold">Event Log</div>
+      <div class="event-log" id="event-log"><div class="event">System starting...</div></div>
+    </div>
+  </div>
+</div>
+
+<button id="diag-toggle" onclick="toggleDiag()">⚙ Backend Status</button>
+
+<script src="app.js"></script>
+</body>
+</html>
