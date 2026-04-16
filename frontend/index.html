@@ -9,92 +9,138 @@
     body { background: #0F172A; color: #E2E8F0; font-family: Arial, sans-serif;
            display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
+    /* ── HEADER ── */
     header { background: #1E293B; padding: 10px 20px; display: flex;
              justify-content: space-between; align-items: center;
-             border-bottom: 2px solid #0EA5E9; flex-shrink: 0; }
-    .logo { font-size: 1.1rem; font-weight: bold; color: #38BDF8; }
-    .status-dot { width: 10px; height: 10px; border-radius: 50%;
-                  background: #22C55E; display: inline-block; margin-right: 6px;
-                  animation: pulse 2s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-    .status-dot.offline { background: #EF4444; animation: none; }
+             border-bottom: 2px solid #0EA5E9; flex-shrink: 0; gap: 12px; flex-wrap: wrap; }
+    .logo { font-size: 1.1rem; font-weight: bold; color: #38BDF8; white-space: nowrap; }
 
-    #toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    /* ── TOOLBAR ── */
+    #toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .color-swatch { width: 26px; height: 26px; border-radius: 50%;
-                    border: 2px solid transparent; cursor: pointer;
-                    transition: transform 0.15s; }
+                    border: 2px solid transparent; cursor: pointer; transition: transform 0.15s; }
     .color-swatch:hover { transform: scale(1.2); }
     .color-swatch.active { border-color: #fff; transform: scale(1.15); }
     .toolbar-label { color: #94A3B8; font-size: 0.8rem; }
     #brushSize { width: 80px; accent-color: #0EA5E9; }
-    .btn { border: none; border-radius: 6px; padding: 6px 14px;
-           cursor: pointer; font-size: 0.85rem; font-weight: bold; transition: opacity 0.2s; }
-    .btn:hover { opacity: 0.85; }
-    .btn-red { background: #EF4444; color: #fff; }
-    .btn-blue { background: #0EA5E9; color: #fff; }
+    .btn { border: none; border-radius: 6px; padding: 6px 12px;
+           cursor: pointer; font-size: 0.82rem; font-weight: bold;
+           transition: opacity 0.2s, transform 0.1s; white-space: nowrap; }
+    .btn:hover  { opacity: 0.85; }
+    .btn:active { transform: scale(0.96); }
+    .btn-red    { background: #EF4444; color: #fff; }
+    .btn-blue   { background: #0EA5E9; color: #fff; }
+    .btn-purple { background: #7C3AED; color: #fff; }
+    .btn-amber  { background: #D97706; color: #fff; }
+    .btn-green  { background: #16A34A; color: #fff; }
+    .btn-ghost  { background: #1E293B; color: #94A3B8; border: 1px solid #334155; }
+    .btn-ghost:hover { color: #E2E8F0; border-color: #64748B; }
 
+    /* ── WS STATUS ── */
+    #ws-status { font-size: 0.78rem; color: #94A3B8;
+                 display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%;
+                  background: #22C55E; display: inline-block; margin-right: 2px;
+                  animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .status-dot.offline { background: #EF4444; animation: none; }
+
+    /* ── DASHBOARD BAR ── */
+    #dashboard-bar { background: #0F172A; border-bottom: 1px solid #1E293B;
+                     padding: 6px 20px; display: flex; align-items: center;
+                     gap: 20px; font-size: 0.8rem; flex-shrink: 0; flex-wrap: wrap; }
+    .dash-stat { display: flex; align-items: center; gap: 6px; color: #94A3B8; }
+    .dash-val  { font-weight: bold; color: #E2E8F0; }
+    .dash-val.leader   { color: #38BDF8; }
+    .dash-val.warning  { color: #F87171; }
+    .dash-divider { width: 1px; height: 16px; background: #334155; }
+
+    /* ── MAIN LAYOUT ── */
     #main { display: flex; flex: 1; overflow: hidden; }
     #canvas-wrap { flex: 1; position: relative; }
     canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
 
     /* ── DIAGNOSTICS PANEL ── */
     #diag-panel { width: 0; background: #1E293B; border-left: 2px solid #0EA5E9;
-                  overflow: hidden; transition: width 0.35s ease; flex-shrink: 0;
-                  display: flex; flex-direction: column; }
-    #diag-panel.open { width: 320px; }
-    #diag-inner { width: 320px; padding: 16px; overflow-y: auto; height: 100%; }
+                  overflow: hidden; transition: width 0.35s ease;
+                  flex-shrink: 0; display: flex; flex-direction: column; }
+    #diag-panel.open { width: 340px; }
+    #diag-inner { width: 340px; padding: 16px; overflow-y: auto; height: 100%; }
     #diag-inner h2 { color: #38BDF8; font-size: 1rem; margin-bottom: 14px;
                      border-bottom: 1px solid #334155; padding-bottom: 8px; }
 
+    /* ── PARTITION CONTROLS ── */
+    .partition-controls { background: #0F172A; border-radius: 8px; padding: 12px;
+                          margin-bottom: 14px; border-left: 4px solid #7C3AED; }
+    .partition-controls h3 { font-size: 0.8rem; color: #A78BFA; margin-bottom: 8px;
+                              font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; }
+    .partition-btn-row { display: flex; flex-wrap: wrap; gap: 6px; }
+    .partition-btn-row .btn { font-size: 0.75rem; padding: 4px 10px; }
+
+    /* ── REPLICA CARDS ── */
     .replica-card { background: #0F172A; border-radius: 8px; padding: 12px;
                     margin-bottom: 10px; border-left: 4px solid #334155;
                     transition: border-color 0.3s; }
-    .replica-card.leader   { border-left-color: #22C55E; }
-    .replica-card.follower { border-left-color: #F59E0B; }
-    .replica-card.candidate{ border-left-color: #A78BFA; }
+    .replica-card.leader      { border-left-color: #22C55E; }
+    .replica-card.follower    { border-left-color: #F59E0B; }
+    .replica-card.candidate   { border-left-color: #A78BFA; }
     .replica-card.unreachable { border-left-color: #EF4444; opacity: 0.55; }
 
-    .card-title { display: flex; justify-content: space-between; align-items: center; }
-    .replica-name { font-weight: bold; font-size: 0.9rem; color: #E2E8F0; }
-    .badge { font-size: 0.7rem; font-weight: bold; padding: 2px 8px;
+    .card-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+                  margin-bottom: 6px; }
+    .replica-name { font-weight: bold; font-size: 0.9rem; color: #E2E8F0;
+                    margin-right: auto; }
+    .badge { font-size: 0.68rem; font-weight: bold; padding: 2px 7px;
              border-radius: 4px; text-transform: uppercase; }
-    .badge-leader     { background: #166534; color: #86EFAC; }
-    .badge-follower   { background: #78350F; color: #FDE68A; }
-    .badge-candidate  { background: #4C1D95; color: #DDD6FE; }
-    .badge-unreachable{ background: #7F1D1D; color: #FCA5A5; }
+    .badge-leader      { background: #166534; color: #86EFAC; }
+    .badge-follower    { background: #78350F; color: #FDE68A; }
+    .badge-candidate   { background: #4C1D95; color: #DDD6FE; }
+    .badge-unreachable { background: #7F1D1D; color: #FCA5A5; }
+    .badge-partition   { background: #4C1D95; color: #F0ABFC; }
 
-    .card-stats { font-size: 0.78rem; color: #94A3B8; margin-top: 6px; line-height: 1.7; }
-    .log-track { background: #1E293B; border-radius: 4px; height: 6px; margin-top: 8px; }
+    .card-stats { font-size: 0.76rem; color: #94A3B8; line-height: 1.8; }
+    .card-stats strong { color: #CBD5E1; }
+
+    .log-track { background: #1E293B; border-radius: 4px; height: 6px; margin: 8px 0; }
     .log-fill  { height: 6px; border-radius: 4px; background: #0EA5E9;
                  transition: width 0.4s ease; }
 
+    .card-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .card-actions .btn { font-size: 0.72rem; padding: 3px 9px; }
+
+    /* ── GATEWAY CARD ── */
     .gateway-card { background: #0F172A; border-radius: 8px; padding: 12px;
                     margin-bottom: 14px; border-left: 4px solid #0EA5E9; }
-    .gateway-card .card-stats { color: #94A3B8; }
+    .gateway-card .card-label { font-weight: bold; font-size: 0.82rem;
+                                 color: #38BDF8; margin-bottom: 6px; }
+    .gateway-card .card-stats { color: #94A3B8; font-size: 0.78rem; line-height: 1.8; }
 
+    /* ── EVENT LOG ── */
+    .event-log-label { color: #94A3B8; font-size: 0.78rem; margin-bottom: 6px;
+                       font-weight: bold; margin-top: 4px; }
     .event-log { background: #0F172A; border-radius: 6px; padding: 8px;
                  font-size: 0.72rem; font-family: monospace; color: #64748B;
-                 max-height: 160px; overflow-y: auto; margin-top: 14px; }
-    .event-log .event { color: #94A3B8; border-bottom: 1px solid #1E293B;
-                        padding: 3px 0; }
-    .event-log .event.election { color: #A78BFA; }
-    .event-log .event.commit   { color: #4ADE80; }
-    .event-log .event.failover { color: #F87171; }
+                 max-height: 180px; overflow-y: auto; }
+    .event-log .event           { color: #94A3B8; border-bottom: 1px solid #1E293B; padding: 3px 0; }
+    .event-log .event.election  { color: #A78BFA; }
+    .event-log .event.commit    { color: #4ADE80; }
+    .event-log .event.failover  { color: #F87171; }
 
+    /* ── TOGGLE BUTTON ── */
     #diag-toggle { position: fixed; bottom: 20px; right: 20px;
                    background: #0EA5E9; color: #fff; border: none; border-radius: 8px;
                    padding: 10px 16px; cursor: pointer; font-size: 0.85rem; font-weight: bold;
                    box-shadow: 0 4px 20px rgba(14,165,233,0.5); z-index: 50;
                    transition: background 0.2s; }
     #diag-toggle:hover { background: #0284C7; }
-
-    #ws-status { font-size: 0.78rem; color: #94A3B8; display: flex; align-items: center; gap: 6px; }
   </style>
 </head>
 <body>
 
+<!-- ── HEADER ────────────────────────────────────────────────── -->
 <header>
   <div class="logo">🎨 RAFT Drawing Board</div>
+
   <div id="toolbar">
     <span class="toolbar-label">Color:</span>
     <div class="color-swatch active" style="background:#38BDF8" onclick="setColor('#38BDF8',this)"></div>
@@ -104,30 +150,93 @@
     <div class="color-swatch" style="background:#FACC15" onclick="setColor('#FACC15',this)"></div>
     <div class="color-swatch" style="background:#FFFFFF" onclick="setColor('#FFFFFF',this)"></div>
     <div class="color-swatch" style="background:#EF4444" onclick="setColor('#EF4444',this)"></div>
-    <span class="toolbar-label" style="margin-left:6px">Size:</span>
+
+    <span class="toolbar-label" style="margin-left:4px">Size:</span>
     <input type="range" min="2" max="24" value="4" id="brushSize">
-    <button class="btn btn-red" onclick="clearCanvas()">🗑 Clear</button>
+
+    <button class="btn btn-ghost" onclick="sendUndo()" title="Ctrl+Z">↩ Undo</button>
+    <button class="btn btn-ghost" onclick="sendRedo()" title="Ctrl+Y">↪ Redo</button>
+    <button class="btn btn-red"   onclick="clearCanvas()">🗑 Clear</button>
   </div>
+
   <div id="ws-status">
     <div class="status-dot offline" id="ws-dot"></div>
     <span id="ws-label">Connecting...</span>
   </div>
 </header>
 
+<!-- ── DASHBOARD BAR ──────────────────────────────────────────── -->
+<div id="dashboard-bar">
+  <div class="dash-stat">
+    Leader <span class="dash-val leader" id="bar-leader">—</span>
+  </div>
+  <div class="dash-divider"></div>
+  <div class="dash-stat">
+    Term <span class="dash-val" id="bar-term">—</span>
+  </div>
+  <div class="dash-divider"></div>
+  <div class="dash-stat">
+    Clients <span class="dash-val" id="bar-clients">—</span>
+  </div>
+  <div class="dash-divider"></div>
+  <div class="dash-stat">
+    Replicas <span class="dash-val" id="bar-replicas">—</span>
+  </div>
+  <div class="dash-divider"></div>
+  <div class="dash-stat" id="bar-partition-wrap" style="display:none">
+    <span class="dash-val warning" id="bar-partition">—</span>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:6px">
+    <button class="btn btn-amber" style="font-size:0.75rem;padding:4px 10px"
+        onclick="promptPartitionFull()">
+  🚧 Split replica
+    </button>
+    <button class="btn btn-green" style="font-size:0.75rem;padding:4px 10px"
+            onclick="healAll()">
+      ✅ Heal all
+    </button>
+  </div>
+</div>
+
+<!-- ── MAIN ──────────────────────────────────────────────────── -->
 <div id="main">
   <div id="canvas-wrap">
     <canvas id="board"></canvas>
   </div>
+
+  <!-- ── DIAGNOSTICS PANEL ── -->
   <div id="diag-panel">
     <div id="diag-inner">
       <h2>⚙ Cluster Diagnostics</h2>
+
+      <!-- Gateway summary -->
       <div class="gateway-card">
-        <div style="font-weight:bold;font-size:0.85rem;color:#38BDF8;margin-bottom:6px">Gateway</div>
+        <div class="card-label">Gateway</div>
         <div class="card-stats" id="gw-stats">Loading...</div>
       </div>
+
+      <!-- Partition controls -->
+      <div class="partition-controls">
+        <h3>Network partitions</h3>
+        <div class="partition-btn-row">
+          <button class="btn btn-purple" onclick="partitionReplicas('replica1','replica2')">R1 ↔ R2</button>
+          <button class="btn btn-purple" onclick="partitionReplicas('replica1','replica3')">R1 ↔ R3</button>
+          <button class="btn btn-purple" onclick="partitionReplicas('replica1','replica4')">R1 ↔ R4</button>
+          <button class="btn btn-purple" onclick="partitionReplicas('replica2','replica3')">R2 ↔ R3</button>
+          <button class="btn btn-purple" onclick="partitionReplicas('replica2','replica4')">R2 ↔ R4</button>
+          <button class="btn btn-purple" onclick="partitionReplicas('replica3','replica4')">R3 ↔ R4</button>
+          <button class="btn btn-green"  onclick="healAll()">✅ Heal all</button>
+        </div>
+      </div>
+
+      <!-- Replica cards (populated by app.js) -->
       <div id="replica-list"></div>
-      <div style="color:#94A3B8;font-size:0.78rem;margin-bottom:6px;font-weight:bold">Event Log</div>
-      <div class="event-log" id="event-log"><div class="event">System starting...</div></div>
+
+      <!-- Event log -->
+      <div class="event-log-label">Event Log</div>
+      <div class="event-log" id="event-log">
+        <div class="event">System starting...</div>
+      </div>
     </div>
   </div>
 </div>
@@ -135,5 +244,40 @@
 <button id="diag-toggle" onclick="toggleDiag()">⚙ Backend Status</button>
 
 <script src="app.js"></script>
+
+<!-- Populate dashboard bar from pollStatus() results -->
+<script>
+  // app.js calls pollStatus() which updates replica cards.
+  // This small hook patches pollStatus to also drive the top bar.
+  const _origPoll = pollStatus;
+  async function pollStatus() {
+    await _origPoll();
+    try {
+      const r    = await fetch('/api/cluster-status');
+      const data = await r.json();
+      const leaderShort = data.leaderShort
+        ?? (data.leader ? data.leader.replace('http://','').split(':')[0] : null);
+
+      document.getElementById('bar-leader').textContent   = leaderShort ?? 'None';
+      document.getElementById('bar-term').textContent     = data.term ?? '—';
+      document.getElementById('bar-clients').textContent  = data.clients ?? '—';
+      document.getElementById('bar-replicas').textContent =
+        (data.replicas || []).filter(r => r.state !== 'unreachable').length +
+        ' / ' + (data.replicas || []).length;
+
+      const partWrap = document.getElementById('bar-partition-wrap');
+      const partSpan = document.getElementById('bar-partition');
+      if (data.partitioned?.length) {
+        partWrap.style.display = '';
+        partSpan.textContent = '⚠ ' + data.partitioned.join(' | ');
+      } else {
+        partWrap.style.display = 'none';
+      }
+    } catch (_) {}
+  }
+  setInterval(pollStatus, 1500);
+  pollStatus();
+</script>
+
 </body>
 </html>

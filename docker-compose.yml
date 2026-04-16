@@ -7,12 +7,15 @@ services:
       - REPLICA1_URL=http://replica1:4001
       - REPLICA2_URL=http://replica2:4002
       - REPLICA3_URL=http://replica3:4003
+      - REPLICA4_URL=http://replica4:4004
     depends_on:
       - replica1
       - replica2
       - replica3
+      - replica4
     networks:
       - raft-net
+    restart: unless-stopped
     volumes:
       - ./gateway:/app
       - ./frontend:/frontend
@@ -25,9 +28,11 @@ services:
     environment:
       - REPLICA_ID=replica1
       - PORT=4001
-      - PEERS=http://replica2:4002,http://replica3:4003
+      - PEERS=http://replica2:4002,http://replica3:4003,http://replica4:4004
+      - QUORUM_SIZE=3
     networks:
       - raft-net
+    restart: unless-stopped
     volumes:
       - ./replica1:/app
       - /app/node_modules
@@ -39,9 +44,11 @@ services:
     environment:
       - REPLICA_ID=replica2
       - PORT=4002
-      - PEERS=http://replica1:4001,http://replica3:4003
+      - PEERS=http://replica1:4001,http://replica3:4003,http://replica4:4004
+      - QUORUM_SIZE=3
     networks:
       - raft-net
+    restart: unless-stopped
     volumes:
       - ./replica2:/app
       - /app/node_modules
@@ -53,11 +60,29 @@ services:
     environment:
       - REPLICA_ID=replica3
       - PORT=4003
-      - PEERS=http://replica1:4001,http://replica2:4002
+      - PEERS=http://replica1:4001,http://replica2:4002,http://replica4:4004
+      - QUORUM_SIZE=3
     networks:
       - raft-net
+    restart: unless-stopped
     volumes:
       - ./replica3:/app
+      - /app/node_modules
+
+  replica4:
+    build: ./replica4
+    ports:
+      - "4004:4004"
+    environment:
+      - REPLICA_ID=replica4
+      - PORT=4004
+      - PEERS=http://replica1:4001,http://replica2:4002,http://replica3:4003
+      - QUORUM_SIZE=3
+    networks:
+      - raft-net
+    restart: unless-stopped
+    volumes:
+      - ./replica4:/app
       - /app/node_modules
 
 networks:

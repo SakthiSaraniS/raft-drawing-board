@@ -5,11 +5,13 @@ let drawing  = false;
 let color    = '#38BDF8';
 let brushSz  = 4;
 let path     = [];
+let strokes  = []; // all committed strokes, used for full redraw on undo
 
 function resize() {
   const wrap = document.getElementById('canvas-wrap');
   canvas.width  = wrap.clientWidth;
   canvas.height = wrap.clientHeight;
+  redraw(); // re-render after resize so strokes aren't wiped
 }
 window.addEventListener('resize', resize);
 resize();
@@ -70,9 +72,34 @@ function drawFullStroke(stroke) {
   }
 }
 
+function redraw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  strokes.forEach(drawFullStroke);
+}
+
 function clearCanvas() {
+  strokes = [];
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
+
+// ─── UNDO / REDO ───────────────────────────────────────────────
+function sendUndo() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'undo' }));
+  }
+}
+
+function sendRedo() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'redo' }));
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && !e.shiftKey && e.key === 'z') { e.preventDefault(); sendUndo(); }
+  if (e.ctrlKey && e.shiftKey  && e.key === 'z') { e.preventDefault(); sendRedo(); }
+  if (e.ctrlKey && !e.shiftKey && e.key === 'y') { e.preventDefault(); sendRedo(); }
+});
 
 // ─── WEBSOCKET ─────────────────────────────────────────────────
 let ws;
@@ -103,17 +130,92 @@ function connectWS() {
   ws.onmessage = e => {
     try {
       const msg = JSON.parse(e.data);
+
       if (msg.type === 'stroke') {
+        strokes.push(msg.data);
         drawFullStroke(msg.data);
       }
+
+      if (msg.type === 'undo') {
+        // Remove the cancelled stroke by ID and redraw from scratch
+        strokes = strokes.filter(s => s.id !== msg.targetId);
+        redraw();
+        addEvent(`↩ Undo — stroke ${(msg.targetId || '').slice(0, 8)} removed`, 'failover');
+      }
+
+      if (msg.type === 'redo') {
+        // Re-add the restored stroke (already carries its original ID)
+        strokes.push(msg.data);
+        drawFullStroke(msg.data);
+        addEvent(`↪ Redo — stroke ${(msg.data?.id || '').slice(0, 8)} restored`, 'commit');
+      }
+
     } catch (_) {}
   };
 }
 connectWS();
 
+// ─── PARTITION CONTROLS ────────────────────────────────────────
+const REPLICA_NAMES = ['replica1', 'replica2', 'replica3', 'replica4'];
+
+async function partitionReplicas(a, b) {
+  if (!a || !b || a === b) return;
+  if (!REPLICA_NAMES.includes(b)) {
+    addEvent(`Unknown replica: ${b}`, 'failover');
+    return;
+  }
+  try {
+    await fetch('/api/partition', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a, b })
+    });
+    addEvent(`🚧 Partitioned ${a} ↔ ${b}`, 'failover');
+  } catch (_) {
+    addEvent('Partition request failed', 'failover');
+  }
+}
+
+async function healAll() {
+  try {
+    await fetch('/api/heal', { method: 'POST' });
+    addEvent('✅ Network healed — all replicas reconnected', 'commit');
+  } catch (_) {
+    addEvent('Heal request failed', 'failover');
+  }
+}
+
+function promptPartition(fromReplica) {
+  if (!fromReplica || fromReplica === '—' || !REPLICA_NAMES.includes(fromReplica)) {
+    addEvent('Select a valid replica to partition from', 'failover');
+    return;
+  }
+  const peer = prompt(
+    `Partition ${fromReplica} away from which replica?\n\n` +
+    REPLICA_NAMES.filter(n => n !== fromReplica).join(', ')
+  );
+  if (peer) partitionReplicas(fromReplica, peer.trim());
+}
+
+function promptPartitionFull() {
+  const a = prompt('Partition which replica?\n\nreplica1, replica2, replica3, replica4');
+  if (!a || !REPLICA_NAMES.includes(a.trim())) {
+    addEvent('Invalid replica name', 'failover');
+    return;
+  }
+  const b = prompt(
+    `Partition ${a.trim()} away from which replica?\n\n` +
+    REPLICA_NAMES.filter(n => n !== a.trim()).join(', ')
+  );
+  if (b && REPLICA_NAMES.includes(b.trim())) {
+    partitionReplicas(a.trim(), b.trim());
+  }
+}
+
 // ─── DIAGNOSTICS PANEL ─────────────────────────────────────────
 let diagOpen = false;
 let lastLeader = null;
+let lastTermSeen = null;
 
 function toggleDiag() {
   diagOpen = !diagOpen;
@@ -132,52 +234,88 @@ function addEvent(text, type = '') {
   while (log.children.length > 40) log.removeChild(log.lastChild);
 }
 
+// ─── DASHBOARD POLL ────────────────────────────────────────────
 async function pollStatus() {
   try {
     const r    = await fetch('/api/cluster-status');
     const data = await r.json();
 
-    // Gateway stats
-    document.getElementById('gw-stats').innerHTML =
-      `Leader: <strong style="color:#38BDF8">${data.leader ? data.leader.replace('http://','') : 'None'}</strong><br>` +
-      `Connected clients: ${data.clients ?? '?'}`;
+    // ── cluster summary bar ────────────────────────────────────
+    const leaderShort = data.leaderShort
+      ?? (data.leader ? data.leader.replace('http://','').split(':')[0] : null);
 
-    // Detect leader change
+    document.getElementById('gw-stats').innerHTML =
+      `Leader: <strong style="color:#38BDF8">${leaderShort ?? 'None'}</strong>` +
+      ` &nbsp;|&nbsp; Term: <strong style="color:#a78bfa">${data.term ?? '—'}</strong>` +
+      ` &nbsp;|&nbsp; Clients: <strong>${data.clients ?? '?'}</strong>` +
+      (data.partitioned?.length
+        ? `<br><span style="color:#f87171">⚠ Partitioned: ${data.partitioned.join('  |  ')}</span>`
+        : '');
+
+    // ── leader change event ────────────────────────────────────
     if (data.leader !== lastLeader) {
       if (lastLeader !== null) {
-        addEvent(`Failover! New leader: ${(data.leader||'none').replace('http://','').split(':')[0]}`, 'failover');
+        addEvent(`👑 Failover → new leader: ${leaderShort ?? 'none'}`, 'failover');
       }
       lastLeader = data.leader;
     }
 
-    // Replica cards
-    const list = document.getElementById('replica-list');
-    const maxLog = Math.max(...(data.replicas||[]).map(r => r.logLength||0), 1);
+    // ── term bump event (election happened) ───────────────────
+    if (data.term != null && data.term !== lastTermSeen) {
+      if (lastTermSeen !== null) {
+        addEvent(`🗳 Election — term bumped to ${data.term}`, 'election');
+      }
+      lastTermSeen = data.term;
+    }
+
+    // ── replica cards ──────────────────────────────────────────
+    const list   = document.getElementById('replica-list');
+    const maxLog = Math.max(...(data.replicas || []).map(r => r.logLength || 0), 1);
 
     list.innerHTML = '';
     (data.replicas || []).forEach(r => {
-      const pct  = Math.round((r.logLength||0) / maxLog * 100);
-      const card = document.createElement('div');
+      const pct      = Math.round((r.logLength || 0) / maxLog * 100);
+      const shortId  = (r.id || '').replace('http://','').split(':')[0] || r.id;
+      const isBlocked = r.blocked?.length > 0;
+      const card     = document.createElement('div');
+
       card.className = `replica-card ${r.state || 'unreachable'}`;
-      const shortId = (r.id||r.id||'').replace('http://','').split(':')[0];
       card.innerHTML = `
         <div class="card-title">
-          <span class="replica-name">${r.id || shortId}</span>
-          <span class="badge badge-${r.state||'unreachable'}">${(r.state||'unreachable').toUpperCase()}</span>
+          <span class="replica-name">${shortId}</span>
+          <span class="badge badge-${r.state || 'unreachable'}">
+            ${(r.state || 'unreachable').toUpperCase()}
+          </span>
+          ${isBlocked ? '<span class="badge badge-partition">ISOLATED</span>' : ''}
         </div>
         <div class="card-stats">
-          Term: <strong>${r.term ?? '—'}</strong> &nbsp;|&nbsp;
-          Log: <strong>${r.logLength ?? 0}</strong> entries &nbsp;|&nbsp;
+          Term: <strong>${r.term ?? '—'}</strong>
+          &nbsp;|&nbsp;
+          Log: <strong>${r.logLength ?? 0}</strong> entries
+          &nbsp;|&nbsp;
           Committed: <strong>${r.commitIndex ?? -1}</strong>
-          ${r.leaderId ? `<br>Leader ID: ${r.leaderId}` : ''}
+          &nbsp;|&nbsp;
+          Active strokes: <strong>${r.activeStrokes ?? '—'}</strong>
+          ${r.quorum   ? `<br>Quorum: <strong>${r.quorum}</strong>` : ''}
+          ${r.leaderId ? `<br>Follows: <strong>${r.leaderId}</strong>` : ''}
+          ${isBlocked  ? `<br><span style="color:#f87171">Blocking: ${r.blocked.join(', ')}</span>` : ''}
         </div>
-        <div class="log-track">
+        <div class="log-track" title="Log fill relative to busiest replica">
           <div class="log-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="card-actions">
+          <button onclick="promptPartition('${shortId}')">Split from peer</button>
+          <button onclick="healAll()">Heal all</button>
+          <button onclick="sendUndo()">↩ Undo</button>
+          <button onclick="sendRedo()">↪ Redo</button>
         </div>`;
+
       list.appendChild(card);
 
-      // Detect election events from state changes
-      if (r.state === 'candidate') addEvent(`${r.id} started election (term ${r.term})`, 'election');
+      // election in progress
+      if (r.state === 'candidate') {
+        addEvent(`${shortId} started election (term ${r.term})`, 'election');
+      }
     });
 
   } catch (_) {}

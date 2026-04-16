@@ -1,11 +1,13 @@
 const express = require('express');
 const axios   = require('axios');
+const crypto  = require('crypto');
 const app     = express();
 app.use(express.json());
 
 const REPLICA_ID = process.env.REPLICA_ID;
 const PORT       = parseInt(process.env.PORT);
 const PEERS      = process.env.PEERS.split(',');
+const QUORUM     = parseInt(process.env.QUORUM_SIZE) || Math.floor(PEERS.length / 2) + 1;
 
 // ─── RAFT STATE ────────────────────────────────────────────────
 let state       = 'follower';
@@ -15,6 +17,10 @@ let log         = [];
 let commitIndex = -1;
 let leaderId    = null;
 let electionTimer = null;
+const blocked   = new Set(); // peer URLs this replica won't talk to
+
+// NOTE: No in-memory undoStack/redoStack — both are derived from the
+// replicated log on demand, so undo/redo survives leader failover.
 
 // ─── ELECTION TIMER ────────────────────────────────────────────
 function resetElectionTimer() {
@@ -31,7 +37,7 @@ async function startElection() {
   console.log(`[${REPLICA_ID}] 🗳  Starting election for term ${currentTerm}`);
 
   const results = await Promise.all(
-    PEERS.map(peer =>
+    PEERS.filter(p => !blocked.has(p)).map(peer =>
       axios.post(`${peer}/request-vote`,
         { term: currentTerm, candidateId: REPLICA_ID },
         { timeout: 400 }
@@ -40,9 +46,9 @@ async function startElection() {
   );
 
   results.forEach(r => { if (r.data.voteGranted) votes++; });
-  console.log(`[${REPLICA_ID}] Votes received: ${votes}`);
+  console.log(`[${REPLICA_ID}] Votes received: ${votes} (quorum: ${QUORUM})`);
 
-  if (votes >= 2 && state === 'candidate') {
+  if (votes >= QUORUM && state === 'candidate') {
     becomeLeader();
   } else {
     state = 'follower';
@@ -59,13 +65,90 @@ function becomeLeader() {
 
 function sendHeartbeats() {
   if (state !== 'leader') return;
-  PEERS.forEach(peer =>
+  PEERS.filter(p => !blocked.has(p)).forEach(peer =>
     axios.post(`${peer}/heartbeat`,
       { term: currentTerm, leaderId: REPLICA_ID },
       { timeout: 300 }
     ).catch(() => {})
   );
   setTimeout(sendHeartbeats, 150);
+}
+
+// ─── REPLICATION HELPER ────────────────────────────────────────
+// Appends entry to local log, replicates to peers, commits if quorum reached.
+// Returns { committed, index } — used by /stroke, /undo, /redo.
+async function replicateEntry(entry) {
+  const index = log.length;
+  log.push({ term: currentTerm, entry, committed: false });
+
+  let acks = 1;
+  await Promise.all(
+    // Bug fix: filter blocked peers so partitioned replicas don't eat
+    // 400ms timeouts on every write — same filter used in heartbeats/votes
+    PEERS.filter(p => !blocked.has(p)).map(peer =>
+      axios.post(`${peer}/append-entries`, {
+        term: currentTerm, leaderId: REPLICA_ID,
+        entry, prevLogIndex: index - 1
+      }, { timeout: 400 })
+      .then(r => { if (r.data.success) acks++; })
+      .catch(() => {})
+    )
+  );
+
+  if (acks >= QUORUM) {
+    log[index].committed = true;
+    commitIndex = index;
+    console.log(`[${REPLICA_ID}] ✅ Committed entry #${index} type=${entry.type || 'stroke'} (acks: ${acks})`);
+    // Commit broadcast goes to ALL peers (fire-and-forget, ok if some miss it)
+    PEERS.forEach(peer =>
+      axios.post(`${peer}/commit`, { index }, { timeout: 300 }).catch(() => {})
+    );
+    return { committed: true, index };
+  } else {
+    log[index].committed = false;
+    console.log(`[${REPLICA_ID}] ❌ Entry failed — not enough acks (${acks}/${QUORUM})`);
+    return { committed: false };
+  }
+}
+
+// ─── LOG-DERIVED UNDO/REDO STATE ───────────────────────────────
+// Scans the committed log to reconstruct what is currently undoable
+// and redoable. Because this reads from the replicated log (not
+// in-memory stacks), it works correctly after a leader failover.
+function getUndoRedoState() {
+  const cancelledIds = new Set();
+  const recentlyCancelled = []; // ordered list of { id, stroke } for redo
+
+  for (const entry of log) {
+    if (!entry.committed) continue;
+
+    if (entry.entry?.type === 'cancel') {
+      const targetId = entry.entry.targetId;
+      cancelledIds.add(targetId);
+      // Find the original stroke so redo can re-apply it
+      const original = log.find(
+        e => e.committed && e.entry?.id === targetId && e.entry?.type !== 'cancel'
+      );
+      if (original) recentlyCancelled.push({ id: targetId, stroke: original.entry });
+
+    } else if (entry.entry?.id) {
+      // A new stroke (including a redo) clears it from the cancelled list
+      const idx = recentlyCancelled.findIndex(r => r.id === entry.entry.id);
+      if (idx !== -1) recentlyCancelled.splice(idx, 1);
+      cancelledIds.delete(entry.entry.id);
+    }
+  }
+
+  // Last active stroke = what undo will cancel next
+  const activeStrokes = log.filter(
+    e => e.committed && e.entry?.type !== 'cancel' && !cancelledIds.has(e.entry?.id)
+  );
+  const lastActive = activeStrokes.length > 0
+    ? activeStrokes[activeStrokes.length - 1]
+    : null;
+
+  // Last entry in recentlyCancelled = what redo will restore next
+  return { lastActive, redoStack: recentlyCancelled, cancelledIds };
 }
 
 // ─── RPC ENDPOINTS ─────────────────────────────────────────────
@@ -105,7 +188,7 @@ app.post('/append-entries', (req, res) => {
   }
   if (entry) {
     log.push({ term, entry, committed: false });
-    console.log(`[${REPLICA_ID}] Appended entry #${log.length - 1}`);
+    console.log(`[${REPLICA_ID}] Appended entry #${log.length - 1} type=${entry.type || 'stroke'}`);
   }
   res.json({ success: true });
 });
@@ -128,10 +211,27 @@ app.get('/sync-log', (req, res) => {
 });
 
 app.get('/status', (req, res) => {
+  // Re-use getUndoRedoState so active stroke count is consistent
+  const { cancelledIds } = getUndoRedoState();
+  const activeStrokes = log.filter(
+    e => e.committed && e.entry?.type !== 'cancel' && !cancelledIds.has(e.entry?.id)
+  ).length;
+
   res.json({
     id: REPLICA_ID, state, term: currentTerm,
-    leaderId, logLength: log.length, commitIndex
+    leaderId, logLength: log.length, commitIndex,
+    activeStrokes, quorum: QUORUM,
+    blocked: [...blocked]
   });
+});
+
+// ─── PARTITION CONTROL ─────────────────────────────────────────
+app.post('/set-block', (req, res) => {
+  const { peers } = req.body; // array of full URLs e.g. ["http://replica2:4002"]
+  blocked.clear();
+  peers.forEach(p => blocked.add(p));
+  console.log(`[${REPLICA_ID}] 🚧 Blocking peers: ${peers.join(', ') || 'none'}`);
+  res.json({ ok: true, blocked: [...blocked] });
 });
 
 // ─── STROKE HANDLER (leader only) ──────────────────────────────
@@ -140,37 +240,70 @@ app.post('/stroke', async (req, res) => {
     return res.status(302).json({ redirect: leaderId });
   }
   const { stroke } = req.body;
-  const index = log.length;
-  log.push({ term: currentTerm, entry: stroke, committed: false });
 
-  let acks = 1;
-  await Promise.all(
-    PEERS.map(peer =>
-      axios.post(`${peer}/append-entries`, {
-        term: currentTerm, leaderId: REPLICA_ID,
-        entry: stroke, prevLogIndex: index - 1
-      }, { timeout: 400 })
-      .then(r => { if (r.data.success) acks++; })
-      .catch(() => {})
-    )
-  );
+  // Assign stable ID — needed so undo/redo can reference this stroke by ID
+  stroke.id = stroke.id || crypto.randomUUID();
 
-  if (acks >= 2) {
-    log[index].committed = true;
-    commitIndex = index;
-    console.log(`[${REPLICA_ID}] ✅ Stroke committed at index ${index} (acks: ${acks})`);
-    PEERS.forEach(peer =>
-      axios.post(`${peer}/commit`, { index }, { timeout: 300 }).catch(() => {})
-    );
+  // No need to manually clear a redo stack — getUndoRedoState() derives
+  // redo eligibility from the log, so new strokes automatically collapse it
+
+  const result = await replicateEntry(stroke);
+  if (result.committed) {
     res.json({ success: true, committed: true, stroke });
   } else {
-    log[index].committed = false;
-    console.log(`[${REPLICA_ID}] ❌ Stroke failed — not enough acks (${acks})`);
     res.json({ success: false, reason: 'No majority' });
   }
 });
 
+// ─── UNDO HANDLER (leader only) ────────────────────────────────
+// Appends a 'cancel' compensation entry — never truncates the log.
+// This preserves Raft's append-only guarantee.
+app.post('/undo', async (req, res) => {
+  if (state !== 'leader') {
+    return res.status(302).json({ redirect: leaderId });
+  }
+
+  // Derive from log — works even after a leader failover
+  const { lastActive } = getUndoRedoState();
+  if (!lastActive) {
+    return res.json({ committed: false, reason: 'Nothing to undo' });
+  }
+
+  const targetId = lastActive.entry.id;
+  const result = await replicateEntry({ type: 'cancel', targetId });
+
+  if (result.committed) {
+    console.log(`[${REPLICA_ID}] ↩  Undo committed — cancelled stroke ${targetId}`);
+    res.json({ committed: true, targetId });
+  } else {
+    res.json({ committed: false, reason: 'No majority for undo' });
+  }
+});
+
+// ─── REDO HANDLER (leader only) ────────────────────────────────
+// Re-appends the stroke with its original ID so the frontend can reconcile.
+app.post('/redo', async (req, res) => {
+  if (state !== 'leader') {
+    return res.status(302).json({ redirect: leaderId });
+  }
+
+  // Derive from log — works even after a leader failover
+  const { redoStack } = getUndoRedoState();
+  const last = redoStack[redoStack.length - 1]; // most recently cancelled
+  if (!last) {
+    return res.json({ committed: false, reason: 'Nothing to redo' });
+  }
+
+  const result = await replicateEntry(last.stroke);
+  if (result.committed) {
+    console.log(`[${REPLICA_ID}] ↪  Redo committed — restored stroke ${last.id}`);
+    res.json({ committed: true, stroke: last.stroke });
+  } else {
+    res.json({ committed: false, reason: 'No majority for redo' });
+  }
+});
+
 app.listen(PORT, () => {
-  console.log(`[${REPLICA_ID}] 🚀 Listening on port ${PORT}`);
+  console.log(`[${REPLICA_ID}] 🚀 Listening on port ${PORT} | peers: ${PEERS.length} | quorum: ${QUORUM}`);
   resetElectionTimer();
 });
