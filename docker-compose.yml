@@ -1,4 +1,5 @@
 services:
+
   gateway:
     build: ./gateway
     ports:
@@ -8,6 +9,10 @@ services:
       - REPLICA2_URL=http://replica2:4002
       - REPLICA3_URL=http://replica3:4003
       - REPLICA4_URL=http://replica4:4004
+      # REPLICA5_URL is intentionally absent here.
+      # replica5 only joins the cluster at runtime via
+      # POST /api/blue-green/promote — the gateway discovers
+      # it dynamically, no restart needed.
     depends_on:
       - replica1
       - replica2
@@ -89,11 +94,47 @@ services:
       - /app/node_modules
       - replica4-data:/data
 
+  # ── replica5 — blue-green spare ────────────────────────────────
+  # Only started when you explicitly need it for a blue-green demo.
+  # It knows about all four original peers so it can receive
+  # heartbeats and replicated entries from whoever is leader.
+  # The gateway does NOT know about it at startup; you register it
+  # at runtime via POST /api/blue-green/promote.
+  #
+  # Usage:
+  #   docker compose --profile blue-green up -d replica5
+  #
+  # replica5 uses the same Dockerfile as replica4 (or any replica).
+  # If you haven't created a replica5 directory yet, copy replica4:
+  #   cp -r replica4 replica5
+  #   sed -i 's/replica4/replica5/g' replica5/index.js   # if ID is hardcoded
+  replica5:
+    build: ./replica5
+    profiles:
+      - blue-green          # NOT started by default — only on demand
+    ports:
+      - "4005:4005"
+    environment:
+      - REPLICA_ID=replica5
+      - PORT=4005
+      # Knows about all four original peers so it can participate
+      # in elections and receive log entries immediately on join
+      - PEERS=http://replica1:4001,http://replica2:4002,http://replica3:4003,http://replica4:4004
+      - QUORUM_SIZE=3
+    networks:
+      - raft-net
+    # No restart policy — we bring it up manually for the demo
+    volumes:
+      - ./replica5:/app
+      - /app/node_modules
+      - replica5-data:/data
+
 volumes:
   replica1-data:
   replica2-data:
   replica3-data:
   replica4-data:
+  replica5-data:
 
 networks:
   raft-net:

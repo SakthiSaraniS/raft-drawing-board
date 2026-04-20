@@ -6,16 +6,25 @@ const http    = require('http');
 const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocketServer({ server });
+
+// ── Fix: prevent MaxListenersExceededWarning from rapid WS reconnects ──
+wss.setMaxListeners(50);
+server.setMaxListeners(50);
+
 app.use(express.json());
 app.use(express.static('/frontend'));
 
 // ─── REPLICA REGISTRY ──────────────────────────────────────────
-// Supports 3 or 4 replicas — REPLICA4_URL is optional
+// Starts with replica1–4 from env.
+// replica5 is added at runtime via the blue-green promote API.
+// REPLICA5_URL is intentionally NOT set in the gateway env at startup —
+// it joins dynamically so you don't need to restart the gateway.
 const REPLICAS = [
   process.env.REPLICA1_URL,
   process.env.REPLICA2_URL,
   process.env.REPLICA3_URL,
   process.env.REPLICA4_URL,
+  // REPLICA5_URL is absent here on purpose — joins via /api/blue-green/promote
 ].filter(Boolean);
 
 // Map from URL → short name e.g. "http://replica1:4001" → "replica1"
@@ -61,7 +70,7 @@ async function applyPartition(a, b) {
   ]);
 }
 
-// Clear all blocks on all replicas
+// Clear all blocks on all replicas (including any added mid blue-green)
 async function healAll() {
   await Promise.allSettled(
     REPLICAS.map(url =>
@@ -95,9 +104,20 @@ setInterval(findLeader, 300);
 findLeader();
 
 // ─── BROADCAST HELPER ──────────────────────────────────────────
+// Fix: handle CONNECTING state (readyState 0) so a client that just
+// reconnected doesn't miss a stroke that arrived mid-handshake.
 function broadcast(msg) {
   const out = JSON.stringify(msg);
-  clients.forEach(c => { if (c.readyState === 1) c.send(out); });
+  clients.forEach(c => {
+    if (c.readyState === 1) {
+      // OPEN — send immediately
+      c.send(out);
+    } else if (c.readyState === 0) {
+      // CONNECTING — queue until open
+      c.once('open', () => { if (c.readyState === 1) c.send(out); });
+    }
+    // CLOSING / CLOSED — skip, ws.on('close') will remove from clients
+  });
 }
 
 // ─── WEBSOCKET ─────────────────────────────────────────────────
@@ -288,6 +308,8 @@ app.get('/api/cluster-status', async (req, res) => {
     replicas: statuses,
     clients: clients.size,
     partitioned: [...partitioned],
+    // Include live registry so the frontend can show the real cluster size
+    registeredReplicas: REPLICAS.map(shortName),
   });
 });
 
@@ -317,12 +339,183 @@ app.post('/api/chaos-stroke', async (req, res) => {
   }
 });
 
-// ─── HEALTH CHECK (useful for cloud deployment / load balancer) ─
+// ─── LEADER ISOLATION API ──────────────────────────────────────
+// Isolates the current leader from all followers in one shot.
+// The majority (followers) can still talk to each other and
+// elect a new leader within 500–800 ms.
+app.post('/api/isolate-leader', async (req, res) => {
+  if (!currentLeader) await findLeader();
+  if (!currentLeader) {
+    return res.status(503).json({ error: 'No leader elected yet — try again in a moment' });
+  }
+
+  const leaderName = shortName(currentLeader);
+  const followerNames = REPLICAS
+    .filter(u => u !== currentLeader)
+    .map(shortName);
+
+  // Build partition pairs: leader ↔ every follower
+  const pairs = followerNames.map(f => `${leaderName}:${f}`);
+  pairs.forEach(p => partitioned.add(p));
+
+  // Push the block list to all affected replicas
+  await Promise.allSettled(
+    followerNames.map(f => applyPartition(leaderName, f))
+  );
+
+  console.log(`[Gateway] 🔴 Leader ${leaderName} isolated from ${followerNames.join(', ')}`);
+  broadcast({ type: 'leaderIsolated', leader: leaderName });
+
+  res.json({ ok: true, isolated: leaderName, followers: followerNames });
+});
+
+// ─── BLUE-GREEN REPLACEMENT API ────────────────────────────────
+//
+// Blue-green is a two-step sequence:
+//
+//  STEP 1 — Promote replica5 into the live cluster:
+//  POST /api/blue-green/promote  { url: "http://replica5:4005" }
+//    • Verifies the container is reachable.
+//    • Adds it to REPLICAS (gateway now polls it, routes to it if leader).
+//    • Pushes the current committed log to it so it catches up instantly.
+//    • Cluster: 4 → 5 members, quorum stays 3.
+//    • Broadcasts clusterChanged to all browser clients.
+//
+//  STEP 2 — Retire the old replica from the cluster:
+//  POST /api/blue-green/retire  { replica: "replica4" }
+//    • Refuses if target is the current leader (must isolate-leader first).
+//    • Removes it from REPLICAS.
+//    • Cluster: 5 → 4 members, quorum stays 3.
+//    • Broadcasts clusterChanged to all browser clients.
+//    • You then stop the container manually.
+//
+// The cluster NEVER drops below 4 live members during the window.
+
+// Step 1: bring new replica into the cluster
+app.post('/api/blue-green/promote', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'url required (e.g. http://replica5:4005)' });
+
+  if (REPLICAS.includes(url)) {
+    return res.status(409).json({ error: `${url} is already in the registry` });
+  }
+
+  // Verify the new replica is actually reachable before adding it
+  try {
+    await axios.get(`${url}/status`, { timeout: 1500 });
+  } catch (e) {
+    return res.status(503).json({
+      error: `Cannot reach ${url} — make sure the container is running`,
+      detail: e.message,
+    });
+  }
+
+  // Add to live registry — findLeader loop will now include it
+  REPLICAS.push(url);
+  console.log(`[Blue-Green] ✅ Promoted ${url} — cluster now has ${REPLICAS.length} members`);
+
+  // Push the current committed log to the new replica so it
+  // catches up immediately rather than waiting for heartbeats
+  let synced = false;
+  let syncedEntries = 0;
+  try {
+    if (!currentLeader) await findLeader();
+    if (currentLeader) {
+      const syncRes = await axios.get(`${currentLeader}/sync-log`,
+        { params: { fromIndex: 0 }, timeout: 1000 }
+      );
+      const canonicalEntries = syncRes.data.entries || [];
+      const statusRes = await axios.get(`${currentLeader}/status`, { timeout: 500 });
+      await axios.post(`${url}/reset-log`,
+        { entries: canonicalEntries, term: statusRes.data.term },
+        { timeout: 2000 }
+      );
+      syncedEntries = canonicalEntries.length;
+      console.log(`[Blue-Green] 🔄 Pushed ${syncedEntries} log entries to ${shortName(url)}`);
+      synced = true;
+    }
+  } catch (e) {
+    // Non-fatal — the replica will catch up via normal heartbeats
+    console.warn(`[Blue-Green] Log push failed (non-fatal): ${e.message}`);
+  }
+
+  // Broadcast to all browser clients so the dashboard updates immediately
+  broadcast({
+    type: 'clusterChanged',
+    event: 'promoted',
+    replica: shortName(url),
+    size: REPLICAS.length,
+    registeredReplicas: REPLICAS.map(shortName),
+  });
+
+  res.json({
+    ok: true,
+    promoted: shortName(url),
+    logSynced: synced,
+    syncedEntries,
+    clusterSize: REPLICAS.length,
+    replicas: REPLICAS.map(shortName),
+  });
+});
+
+// Step 2: retire the old replica from the cluster
+app.post('/api/blue-green/retire', async (req, res) => {
+  const { replica } = req.body; // short name e.g. "replica4"
+  if (!replica) return res.status(400).json({ error: 'replica (short name) required' });
+
+  const url = REPLICAS.find(u => shortName(u) === replica);
+  if (!url) return res.status(404).json({ error: `${replica} not found in registry` });
+
+  // Safety: refuse if this would leave fewer than 4 members
+  if (REPLICAS.length <= 4) {
+    return res.status(400).json({
+      error: `Cluster only has ${REPLICAS.length} members — promote a replacement first before retiring ${replica}`,
+    });
+  }
+
+  // Refuse to retire the active leader — force a failover first
+  if (currentLeader === url) {
+    return res.status(409).json({
+      error: `${replica} is the current leader. Click "Isolate Leader" first, wait ~1s for a new leader, then retry retire.`,
+    });
+  }
+
+  // Remove from the live registry
+  const idx = REPLICAS.indexOf(url);
+  REPLICAS.splice(idx, 1);
+  console.log(`[Blue-Green] 🗑️  Retired ${replica} — cluster now has ${REPLICAS.length} members`);
+
+  // Clear any stale partition entries involving this replica
+  for (const pair of [...partitioned]) {
+    const [a, b] = pair.split(':');
+    if (a === replica || b === replica) partitioned.delete(pair);
+  }
+
+  // Broadcast to all browser clients so the dashboard updates immediately
+  broadcast({
+    type: 'clusterChanged',
+    event: 'retired',
+    replica,
+    size: REPLICAS.length,
+    registeredReplicas: REPLICAS.map(shortName),
+  });
+
+  res.json({
+    ok: true,
+    retired: replica,
+    clusterSize: REPLICAS.length,
+    replicas: REPLICAS.map(shortName),
+    note: `You can now stop the ${replica} container safely.`,
+  });
+});
+
+// ─── HEALTH CHECK ───────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
     leader: currentLeader ? shortName(currentLeader) : null,
     replicas: REPLICAS.length,
+    replicaNames: REPLICAS.map(shortName),
     clients: clients.size,
   });
 });
