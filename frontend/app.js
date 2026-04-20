@@ -131,6 +131,30 @@ function connectWS() {
     try {
       const msg = JSON.parse(e.data);
 
+      if (msg.type === 'sync') {
+        // Two-pass replay matching replica's getUndoRedoState() logic:
+        // Pass 1 — find net-cancelled IDs (cancel entries that were not
+        //           subsequently overwritten by a redo of the same stroke)
+        const cancelledIds = new Set();
+        for (const entry of msg.entries) {
+          if (entry.type === 'cancel') {
+            cancelledIds.add(entry.targetId);
+          } else if (entry.id) {
+            // A stroke re-appearing (redo) removes it from cancelled set
+            cancelledIds.delete(entry.id);
+          }
+        }
+        // Pass 2 — collect visible strokes in order, skipping cancelled ones
+        const syncedStrokes = [];
+        for (const entry of msg.entries) {
+          if (entry.type !== 'cancel' && entry.id && !cancelledIds.has(entry.id)) {
+            syncedStrokes.push(entry);
+          }
+        }
+        strokes = syncedStrokes;
+        redraw();
+      }
+
       if (msg.type === 'stroke') {
         strokes.push(msg.data);
         drawFullStroke(msg.data);

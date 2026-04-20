@@ -36,6 +36,7 @@ services:
     volumes:
       - ./replica1:/app
       - /app/node_modules
+      - replica1-data:/data
 
   replica2:
     build: ./replica2
@@ -52,6 +53,7 @@ services:
     volumes:
       - ./replica2:/app
       - /app/node_modules
+      - replica2-data:/data
 
   replica3:
     build: ./replica3
@@ -68,6 +70,7 @@ services:
     volumes:
       - ./replica3:/app
       - /app/node_modules
+      - replica3-data:/data
 
   replica4:
     build: ./replica4
@@ -84,6 +87,13 @@ services:
     volumes:
       - ./replica4:/app
       - /app/node_modules
+      - replica4-data:/data
+
+volumes:
+  replica1-data:
+  replica2-data:
+  replica3-data:
+  replica4-data:
 
 networks:
   raft-net:

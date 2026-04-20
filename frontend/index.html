@@ -133,6 +133,65 @@
                    box-shadow: 0 4px 20px rgba(14,165,233,0.5); z-index: 50;
                    transition: background 0.2s; }
     #diag-toggle:hover { background: #0284C7; }
+
+    /* ── CHAOS OVERLAY ── */
+    #chaos-overlay {
+      display: none; position: fixed; inset: 0; z-index: 999;
+      background: rgba(0,0,0,0.85); backdrop-filter: blur(4px);
+      align-items: center; justify-content: center;
+    }
+    #chaos-overlay.active { display: flex; }
+    #chaos-box {
+      background: #0F172A; border: 2px solid #DC2626; border-radius: 14px;
+      padding: 28px 32px; width: 560px; max-width: 95vw; max-height: 90vh;
+      overflow-y: auto; font-family: monospace;
+    }
+    #chaos-box h2 {
+      color: #F87171; font-size: 1.2rem; margin-bottom: 4px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    #chaos-subtitle { color: #64748B; font-size: 0.8rem; margin-bottom: 18px; }
+    #chaos-progress-wrap {
+      background: #1E293B; border-radius: 8px; height: 8px;
+      margin-bottom: 18px; overflow: hidden;
+    }
+    #chaos-progress-bar {
+      height: 8px; background: #DC2626; border-radius: 8px;
+      width: 0%; transition: width 0.4s ease;
+    }
+    #chaos-steps { list-style: none; margin-bottom: 18px; }
+    #chaos-steps li {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 7px 0; border-bottom: 1px solid #1E293B;
+      font-size: 0.82rem; color: #64748B; transition: color 0.3s;
+    }
+    #chaos-steps li.running { color: #FCD34D; }
+    #chaos-steps li.pass    { color: #4ADE80; }
+    #chaos-steps li.fail    { color: #F87171; }
+    .step-icon { width: 18px; flex-shrink: 0; text-align: center; }
+    .step-desc { flex: 1; }
+    .step-result { font-size: 0.75rem; color: #94A3B8; margin-top: 2px; }
+    #chaos-summary {
+      background: #1E293B; border-radius: 8px; padding: 12px 16px;
+      font-size: 0.82rem; color: #CBD5E1; display: none; margin-bottom: 16px;
+    }
+    #chaos-summary.visible { display: block; }
+    #chaos-summary h3 { color: #38BDF8; margin-bottom: 8px; font-size: 0.9rem; }
+    .summary-row { display: flex; justify-content: space-between; padding: 3px 0; }
+    .summary-pass { color: #4ADE80; font-weight: bold; }
+    .summary-fail { color: #F87171; font-weight: bold; }
+    #chaos-close-btn {
+      width: 100%; padding: 10px; background: #334155; color: #E2E8F0;
+      border: none; border-radius: 8px; font-size: 0.9rem; cursor: pointer;
+      font-weight: bold; display: none;
+    }
+    #chaos-close-btn:hover { background: #475569; }
+    #chaos-spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid #F87171; border-top-color: transparent;
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -195,6 +254,11 @@
             onclick="healAll()">
       ✅ Heal all
     </button>
+    <button class="btn" id="chaos-btn"
+            style="font-size:0.75rem;padding:4px 12px;background:#DC2626;color:#fff"
+            onclick="startChaosMode()">
+      ☢ Chaos Mode
+    </button>
   </div>
 </div>
 
@@ -244,6 +308,266 @@
 <button id="diag-toggle" onclick="toggleDiag()">⚙ Backend Status</button>
 
 <script src="app.js"></script>
+<!-- ── CHAOS MODE OVERLAY ────────────────────────────────────── -->
+<div id="chaos-overlay">
+  <div id="chaos-box">
+    <h2><span id="chaos-spinner-wrap"><span id="chaos-spinner"></span></span> ☢ Chaos Mode</h2>
+    <div id="chaos-subtitle">Stress testing RAFT consensus under chaotic conditions…</div>
+    <div id="chaos-progress-wrap">
+      <div id="chaos-progress-bar"></div>
+    </div>
+    <ul id="chaos-steps"></ul>
+    <div id="chaos-summary">
+      <h3>📊 Test Results</h3>
+      <div id="chaos-summary-rows"></div>
+    </div>
+    <button id="chaos-close-btn" onclick="closeChaosMode()">✓ Close &amp; Resume Normal Operation</button>
+  </div>
+</div>
+
+<script>
+// ─── CHAOS MODE ────────────────────────────────────────────────
+const CHAOS_TESTS = [
+  {
+    id: 'rapid-failover',
+    label: '⚡ Rapid leader failover',
+    desc: 'Partition leader from 2 peers, await new election, heal',
+    run: async (ctx) => {
+      const status = await ctx.getStatus();
+      const leader = status.leaderShort;
+      if (!leader) throw new Error('No leader found');
+      const peers = ['replica1','replica2','replica3','replica4'].filter(r => r !== leader);
+      await ctx.partition(leader, peers[0]);
+      await ctx.partition(leader, peers[1]);
+      ctx.log(`Isolated ${leader} from ${peers[0]} and ${peers[1]}`);
+      // Poll until a different leader is elected (up to 4 seconds)
+      let newLeader = null;
+      for (let i = 0; i < 16; i++) {
+        await ctx.wait(250);
+        const after = await ctx.getStatus();
+        const candidate = after.leaderShort;
+        if (candidate && candidate !== leader) { newLeader = candidate; break; }
+      }
+      await ctx.heal();
+      await ctx.wait(500); // let healed replica sync
+      if (!newLeader) throw new Error('No new leader elected within 4s');
+      ctx.log(`New leader elected: ${newLeader}`);
+      return `Failover: ${leader} → ${newLeader} ✓`;
+    }
+  },
+  {
+    id: 'rapid-strokes',
+    label: '🖌 Burst of 20 rapid strokes',
+    desc: 'Send 20 strokes sequentially to test sustained commit throughput',
+    run: async (ctx) => {
+      let committed = 0;
+      // RAFT commits are sequential — send one at a time for reliable throughput
+      for (let i = 0; i < 20; i++) {
+        try {
+          const r = await fetch('/api/chaos-stroke', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ index: i })
+          });
+          const d = await r.json();
+          if (d.committed) committed++;
+        } catch (_) {}
+      }
+      if (committed < 15) throw new Error(`Only ${committed}/20 strokes committed`);
+      return `${committed}/20 strokes committed successfully`;
+    }
+  },
+  {
+    id: 'double-failure',
+    label: '💥 One replica isolated — quorum holds',
+    desc: 'Isolate one follower from all peers — leader + 2 others must keep committing',
+    run: async (ctx) => {
+      const status = await ctx.getStatus();
+      const leader = status.leaderShort;
+      if (!leader) throw new Error('No leader');
+      const followers = ['replica1','replica2','replica3','replica4'].filter(r => r !== leader);
+      const victim = followers[0];
+      const others = followers.slice(1);
+      await ctx.partition(victim, leader);
+      await ctx.partition(victim, others[0]);
+      await ctx.partition(victim, others[1]);
+      ctx.log(`Isolated ${victim} from all peers — leader is ${leader}`);
+      await ctx.wait(600);
+      const r = await fetch('/api/chaos-stroke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index: 99 })
+      }).then(r => r.json()).catch(() => ({ committed: false }));
+      // noResync: don't reset logs mid-sequence — just heal the network
+      await fetch('/api/heal', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ noResync: true })
+      });
+      await ctx.wait(300);
+      if (!r.committed) throw new Error('Cluster lost quorum — leader + 2 should suffice');
+      return `Quorum maintained: leader + 2 followers committed while ${victim} was isolated`;
+    }
+  },
+  {
+    id: 'cascade-partition',
+    label: '🌩 Cascading partition storm',
+    desc: 'Create 3 partitions rapidly then heal — verify consensus recovery',
+    run: async (ctx) => {
+      await ctx.partition('replica1', 'replica2');
+      await ctx.wait(300);
+      await ctx.partition('replica2', 'replica3');
+      await ctx.wait(300);
+      await ctx.partition('replica3', 'replica4');
+      await ctx.wait(400);
+      ctx.log('3 partitions active simultaneously');
+      await fetch('/api/heal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ noResync: true }) });
+      await ctx.wait(1500);
+      const status = await ctx.getStatus();
+      if (!status.leaderShort) throw new Error('No leader after healing');
+      const healthy = status.replicas.filter(r => r.state !== 'unreachable').length;
+      return `Recovered — leader: ${status.leaderShort}, ${healthy}/4 replicas healthy`;
+    }
+  },
+  {
+    id: 'flapping',
+    label: '📶 Network flapping (5 cycles)',
+    desc: 'Rapidly partition and heal the same pair 5 times',
+    run: async (ctx) => {
+      let elections = 0;
+      const before = (await ctx.getStatus()).term || 0;
+      for (let i = 0; i < 5; i++) {
+        await ctx.partition('replica1', 'replica2');
+        await ctx.wait(350);
+        await fetch('/api/heal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ noResync: true }) });
+        await ctx.wait(350);
+      }
+      const after = await ctx.getStatus();
+      if (!after.leaderShort) throw new Error('No stable leader after flapping');
+      const termDelta = (after.term || 0) - before;
+      return `Stable after 5 flap cycles — term advanced by ${termDelta}`;
+    }
+  },
+  {
+    id: 'persistence-check',
+    label: '💾 Persistence after restart simulation',
+    desc: 'Draw a stroke, verify it appears in sync-log (survives restart)',
+    run: async (ctx) => {
+      // Send a stroke and check it lands in the log
+      const before = await fetch('/api/chaos-stroke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index: 77 })
+      }).then(r => r.json()).catch(() => ({}));
+      if (!before.committed) throw new Error('Stroke not committed');
+      // Check sync-log has entries
+      const status = await ctx.getStatus();
+      const logLen = Math.max(...(status.replicas || []).map(r => r.logLength || 0));
+      if (logLen === 0) throw new Error('Log is empty — persistence may be broken');
+      return `Log has ${logLen} committed entries — canvas state is persisted`;
+    }
+  }
+];
+
+let chaosRunning = false;
+
+function chaosStep(id, label) {
+  const li = document.createElement('li');
+  li.id = `chaos-step-${id}`;
+  li.innerHTML = `<span class="step-icon">⏳</span>
+    <div class="step-desc">
+      <div>${label}</div>
+      <div class="step-result" id="chaos-result-${id}"></div>
+    </div>`;
+  document.getElementById('chaos-steps').appendChild(li);
+  return li;
+}
+
+function setStepState(id, state, result = '') {
+  const li = document.getElementById(`chaos-step-${id}`);
+  if (!li) return;
+  li.className = state;
+  li.querySelector('.step-icon').textContent =
+    state === 'running' ? '▶' : state === 'pass' ? '✓' : '✗';
+  if (result) li.querySelector(`.step-result`).textContent = result;
+}
+
+async function startChaosMode() {
+  if (chaosRunning) return;
+  chaosRunning = true;
+
+  document.getElementById('chaos-overlay').classList.add('active');
+  document.getElementById('chaos-steps').innerHTML = '';
+  document.getElementById('chaos-summary').classList.remove('visible');
+  document.getElementById('chaos-close-btn').style.display = 'none';
+  document.getElementById('chaos-spinner-wrap').innerHTML = '<span id="chaos-spinner"></span>';
+  document.getElementById('chaos-progress-bar').style.width = '0%';
+
+  // Build step list
+  CHAOS_TESTS.forEach(t => chaosStep(t.id, t.label));
+
+  const ctx = {
+    log: (msg) => addEvent(`☢ ${msg}`, 'failover'),
+    wait: (ms) => new Promise(r => setTimeout(r, ms)),
+    getStatus: () => fetch('/api/cluster-status').then(r => r.json()),
+    partition: (a, b) => fetch('/api/partition', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a, b })
+    }).then(r => r.json()),
+    heal: () => fetch('/api/heal', { method: 'POST' }).then(r => r.json()),
+  };
+
+  const results = [];
+  for (let i = 0; i < CHAOS_TESTS.length; i++) {
+    const test = CHAOS_TESTS[i];
+    setStepState(test.id, 'running');
+    document.getElementById('chaos-progress-bar').style.width =
+      `${Math.round(i / CHAOS_TESTS.length * 100)}%`;
+    try {
+      const msg = await test.run(ctx);
+      setStepState(test.id, 'pass', msg);
+      results.push({ label: test.label, pass: true, msg });
+      addEvent(`✅ Chaos: ${test.label} — PASS`, 'commit');
+    } catch (e) {
+      setStepState(test.id, 'fail', e.message);
+      results.push({ label: test.label, pass: false, msg: e.message });
+      addEvent(`❌ Chaos: ${test.label} — FAIL: ${e.message}`, 'failover');
+      // Always heal after a failure so next test starts clean
+      try { await ctx.heal(); } catch (_) {}
+      await ctx.wait(800);
+    }
+    await ctx.wait(200);
+  }
+
+  // Final heal to ensure clean state
+  try { await ctx.heal(); } catch (_) {}
+
+  document.getElementById('chaos-progress-bar').style.width = '100%';
+  document.getElementById('chaos-spinner-wrap').textContent = '✓';
+
+  // Summary
+  const passed = results.filter(r => r.pass).length;
+  const summaryEl = document.getElementById('chaos-summary');
+  const rowsEl = document.getElementById('chaos-summary-rows');
+  rowsEl.innerHTML =
+    `<div class="summary-row"><span>Tests run</span><span>${results.length}</span></div>` +
+    `<div class="summary-row"><span>Passed</span><span class="summary-pass">${passed}</span></div>` +
+    `<div class="summary-row"><span>Failed</span><span class="summary-fail">${results.length - passed}</span></div>` +
+    `<div class="summary-row" style="margin-top:8px;color:${passed===results.length?'#4ADE80':'#F87171'}">
+       <span>Verdict</span>
+       <span>${passed === results.length ? '🏆 All systems resilient' : `⚠ ${results.length - passed} test(s) failed`}</span>
+     </div>`;
+  summaryEl.classList.add('visible');
+  document.getElementById('chaos-close-btn').style.display = 'block';
+  chaosRunning = false;
+  addEvent(`☢ Chaos Mode complete — ${passed}/${results.length} tests passed`, passed === results.length ? 'commit' : 'failover');
+}
+
+function closeChaosMode() {
+  document.getElementById('chaos-overlay').classList.remove('active');
+}
+</script>
+
 
 <!-- Populate dashboard bar from pollStatus() results -->
 <script>

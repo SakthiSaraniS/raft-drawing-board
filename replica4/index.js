@@ -1,4 +1,33 @@
 const express = require('express');
+const fs      = require('fs');
+const LOG_PATH = '/data/raft-log.json';
+
+// ─── PERSISTENCE ───────────────────────────────────────────────
+function loadLog() {
+  try {
+    if (fs.existsSync(LOG_PATH)) {
+      const saved = JSON.parse(fs.readFileSync(LOG_PATH, 'utf8'));
+      const all = saved.log || [];
+      // Only restore committed entries — uncommitted ones may be from a diverged term
+      log = all.filter(e => e.committed);
+      commitIndex = log.length - 1;
+      currentTerm = saved.currentTerm || 0;
+      console.log(`[${REPLICA_ID}] 📂 Restored ${log.length} committed entries (discarded ${all.length - log.length} uncommitted)`);
+    }
+  } catch (e) {
+    console.error(`[${REPLICA_ID}] ⚠️  Could not restore log:`, e.message);
+  }
+}
+
+function persistLog() {
+  try {
+    fs.mkdirSync('/data', { recursive: true });
+    fs.writeFileSync(LOG_PATH, JSON.stringify({ log, commitIndex, currentTerm }));
+  } catch (e) {
+    console.error(`[${REPLICA_ID}] ⚠️  Could not persist log:`, e.message);
+  }
+}
+
 const axios   = require('axios');
 const crypto  = require('crypto');
 const app     = express();
@@ -98,6 +127,7 @@ async function replicateEntry(entry) {
   if (acks >= QUORUM) {
     log[index].committed = true;
     commitIndex = index;
+    persistLog();
     console.log(`[${REPLICA_ID}] ✅ Committed entry #${index} type=${entry.type || 'stroke'} (acks: ${acks})`);
     // Commit broadcast goes to ALL peers (fire-and-forget, ok if some miss it)
     PEERS.forEach(peer =>
@@ -198,6 +228,7 @@ app.post('/commit', (req, res) => {
   if (log[index]) {
     log[index].committed = true;
     commitIndex = index;
+    persistLog();
     console.log(`[${REPLICA_ID}] ✅ Committed entry #${index}`);
   }
   res.json({ success: true });
@@ -208,6 +239,20 @@ app.get('/sync-log', (req, res) => {
   const missing = log.slice(from).filter(e => e.committed);
   console.log(`[${REPLICA_ID}] Sync-log from index ${from}: sending ${missing.length} entries`);
   res.json({ entries: missing });
+});
+
+// Emergency log reset — called by gateway after chaos heal when logs have diverged
+app.post('/reset-log', (req, res) => {
+  const { entries = [], term = currentTerm } = req.body;
+  log = entries.map(e => ({ term: e.term || term, entry: e.entry || e, committed: true }));
+  commitIndex = log.length - 1;
+  currentTerm = term;
+  state = 'follower';
+  votedFor = null;
+  persistLog();
+  resetElectionTimer();
+  console.log(`[${REPLICA_ID}] 🔄 Log reset to ${log.length} entries`);
+  res.json({ ok: true, logLength: log.length });
 });
 
 app.get('/status', (req, res) => {
@@ -305,5 +350,6 @@ app.post('/redo', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`[${REPLICA_ID}] 🚀 Listening on port ${PORT} | peers: ${PEERS.length} | quorum: ${QUORUM}`);
+  loadLog();
   resetElectionTimer();
 });

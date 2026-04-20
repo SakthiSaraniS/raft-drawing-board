@@ -101,9 +101,27 @@ function broadcast(msg) {
 }
 
 // ─── WEBSOCKET ─────────────────────────────────────────────────
-wss.on('connection', ws => {
+wss.on('connection', async ws => {
   clients.add(ws);
   console.log(`[Gateway] Client connected. Total: ${clients.size}`);
+
+  // ── Sync existing canvas state to newly connected client ────
+  try {
+    if (!currentLeader) await findLeader();
+    if (currentLeader) {
+      const r = await axios.get(`${currentLeader}/sync-log`, {
+        params: { fromIndex: 0 },
+        timeout: 1000
+      });
+      const entries = r.data.entries || [];
+      if (entries.length > 0 && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'sync', entries: entries.map(e => e.entry) }));
+        console.log(`[Gateway] Sent ${entries.length} entries to new client`);
+      }
+    }
+  } catch (e) {
+    console.error('[Gateway] Sync on connect failed:', e.message);
+  }
 
   ws.on('message', async data => {
     try {
@@ -182,7 +200,56 @@ app.post('/api/heal', async (req, res) => {
   partitioned.clear();
   await healAll();
   console.log('[Gateway] ✅ Network healed');
-  res.json({ ok: true });
+
+  // noResync=true means chaos test is mid-sequence and doesn't want log reset
+  const noResync = req.body?.noResync === true;
+
+  // Step 1: Wait for single stable leader (up to 4s)
+  let stabilized = false;
+  let leaderUrl = null;
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 200));
+    const statuses = await Promise.allSettled(
+      REPLICAS.map(url =>
+        axios.get(`${url}/status`, { timeout: 300 }).then(r => r.data)
+      )
+    );
+    const live = statuses.filter(s => s.status === 'fulfilled').map(s => s.value);
+    const leaders = live.filter(s => s.state === 'leader');
+    const allSameTerm = live.length > 0 && live.every(s => s.term === live[0]?.term);
+    if (leaders.length === 1 && allSameTerm) {
+      stabilized = true;
+      leaderUrl = REPLICAS.find(u => u.includes(leaders[0].id));
+      break;
+    }
+  }
+
+  // Step 2: Resync follower logs from leader (only when not in mid-chaos sequence)
+  if (stabilized && leaderUrl && !noResync) {
+    try {
+      const syncRes = await axios.get(`${leaderUrl}/sync-log`,
+        { params: { fromIndex: 0 }, timeout: 1000 }
+      );
+      const canonicalEntries = syncRes.data.entries || [];
+      const leaderTerm = (await axios.get(`${leaderUrl}/status`, { timeout: 500 })).data.term;
+      await Promise.allSettled(
+        REPLICAS
+          .filter(url => url !== leaderUrl)
+          .map(url =>
+            axios.post(`${url}/reset-log`,
+              { entries: canonicalEntries, term: leaderTerm },
+              { timeout: 1000 }
+            )
+          )
+      );
+      console.log(`[Gateway] 🔄 Pushed ${canonicalEntries.length} canonical entries to all followers`);
+    } catch (e) {
+      console.error('[Gateway] Log resync failed:', e.message);
+    }
+  }
+
+  console.log(`[Gateway] Cluster stabilized: ${stabilized}`);
+  res.json({ ok: true, stabilized });
 });
 
 app.get('/api/partitions', (req, res) => {
@@ -222,6 +289,32 @@ app.get('/api/cluster-status', async (req, res) => {
     clients: clients.size,
     partitioned: [...partitioned],
   });
+});
+
+// ─── CHAOS STROKE API (used by chaos mode stress test) ────────
+app.post('/api/chaos-stroke', async (req, res) => {
+  if (!currentLeader) await findLeader();
+  if (!currentLeader) return res.json({ committed: false, reason: 'No leader' });
+  try {
+    const { index = 0 } = req.body;
+    const stroke = {
+      id: `chaos-${Date.now()}-${index}`,
+      path: [
+        { x: 50 + index * 10, y: 50 },
+        { x: 60 + index * 10, y: 60 },
+        { x: 70 + index * 10, y: 50 }
+      ],
+      color: '#EF4444',
+      size: 3
+    };
+    const r = await axios.post(`${currentLeader}/stroke`, { stroke }, { timeout: 1500 });
+    if (r.data.committed) {
+      broadcast({ type: 'stroke', data: r.data.stroke });
+    }
+    res.json(r.data);
+  } catch (e) {
+    res.json({ committed: false, reason: e.message });
+  }
 });
 
 // ─── HEALTH CHECK (useful for cloud deployment / load balancer) ─
