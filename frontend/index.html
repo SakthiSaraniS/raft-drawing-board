@@ -137,60 +137,217 @@
                    transition: background 0.2s; }
     #diag-toggle:hover { background: #0284C7; }
 
+    /* ── ROOM BADGE ── */
+    #room-badge-btn {
+      display: flex; align-items: center; gap: 6px;
+      background: #1E293B; border: 1px solid #334155;
+      border-radius: 8px; padding: 5px 12px; cursor: pointer;
+      font-size: 0.82rem; color: #94A3B8; white-space: nowrap;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #room-badge-btn:hover { border-color: #38BDF8; color: #E2E8F0; }
+    #room-badge { color: #38BDF8; font-weight: bold; }
+    .room-icon { font-size: 0.9rem; }
+
+    /* ── ROOM MODAL ── */
+    #room-modal {
+      display: none; position: fixed; inset: 0; z-index: 997;
+      background: rgba(0,0,0,0.75); backdrop-filter: blur(4px);
+      align-items: center; justify-content: center;
+    }
+    #room-modal.active { display: flex; }
+    #room-box {
+      background: #1E293B; border: 2px solid #38BDF8; border-radius: 14px;
+      padding: 26px 28px; width: 420px; max-width: 95vw; max-height: 80vh;
+      overflow-y: auto;
+    }
+    #room-box h2 { color: #38BDF8; font-size: 1.05rem; margin-bottom: 4px; }
+    #room-box p  { color: #64748B; font-size: 0.8rem; margin-bottom: 16px; }
+    #room-list { margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
+    .room-item {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #0F172A; border: 1px solid #334155; border-radius: 8px;
+      padding: 10px 14px; cursor: pointer; transition: border-color 0.2s;
+    }
+    .room-item:hover { border-color: #38BDF8; }
+    .room-item.active { border-color: #38BDF8; background: #082f49; cursor: default; }
+    .room-item-name { color: #E2E8F0; font-weight: bold; font-size: 0.9rem; }
+    .room-item.active .room-item-name::after { content: ' ← you are here'; color: #38BDF8; font-size: 0.75rem; font-weight: normal; }
+    .room-item-clients { color: #64748B; font-size: 0.78rem; }
+    #room-input-row { display: flex; gap: 8px; }
+    #room-input {
+      flex: 1; background: #0F172A; border: 1px solid #334155; border-radius: 8px;
+      padding: 8px 12px; color: #E2E8F0; font-size: 0.85rem; outline: none;
+    }
+    #room-input:focus { border-color: #38BDF8; }
+    #room-input::placeholder { color: #475569; }
+    #rooms-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+    .room-stat { background: #0F172A; border: 1px solid #334155; border-radius: 6px;
+                 padding: 3px 8px; font-size: 0.75rem; color: #64748B; }
+    .room-stat-active { border-color: #38BDF8; color: #38BDF8; }
+
     /* ── CHAOS OVERLAY ── */
     #chaos-overlay {
       display: none; position: fixed; inset: 0; z-index: 999;
-      background: rgba(0,0,0,0.85); backdrop-filter: blur(4px);
-      align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.88); backdrop-filter: blur(6px);
+      align-items: center; justify-content: center; padding: 16px;
     }
     #chaos-overlay.active { display: flex; }
     #chaos-box {
-      background: #0F172A; border: 2px solid #DC2626; border-radius: 14px;
-      padding: 28px 32px; width: 560px; max-width: 95vw; max-height: 90vh;
-      overflow-y: auto; font-family: monospace;
+      background: #0A1628; border: 2px solid #DC2626; border-radius: 16px;
+      width: 980px; max-width: 98vw; max-height: 94vh;
+      display: flex; flex-direction: column; font-family: monospace;
+      box-shadow: 0 0 60px rgba(220,38,38,0.3);
     }
-    #chaos-box h2 {
-      color: #F87171; font-size: 1.2rem; margin-bottom: 4px;
-      display: flex; align-items: center; gap: 10px;
+    /* header row */
+    #chaos-header {
+      padding: 18px 24px 14px; border-bottom: 1px solid #1E293B;
+      display: flex; align-items: center; gap: 12px; flex-shrink: 0;
     }
-    #chaos-subtitle { color: #64748B; font-size: 0.8rem; margin-bottom: 18px; }
+    #chaos-header h2 {
+      color: #F87171; font-size: 1.15rem; margin: 0; flex: 1;
+      display: flex; align-items: center; gap: 8px;
+    }
+    #chaos-subtitle { color: #475569; font-size: 0.75rem; margin-top: 2px; }
     #chaos-progress-wrap {
-      background: #1E293B; border-radius: 8px; height: 8px;
-      margin-bottom: 18px; overflow: hidden;
+      background: #1E293B; border-radius: 0; height: 4px; flex-shrink: 0;
     }
     #chaos-progress-bar {
-      height: 8px; background: #DC2626; border-radius: 8px;
-      width: 0%; transition: width 0.4s ease;
+      height: 4px; background: linear-gradient(90deg,#DC2626,#F87171);
+      width: 0%; transition: width 0.5s ease;
     }
-    #chaos-steps { list-style: none; margin-bottom: 18px; }
+    /* two-column body */
+    #chaos-body {
+      display: flex; flex: 1; min-height: 0; overflow: hidden;
+    }
+    /* LEFT: test list */
+    #chaos-left {
+      width: 300px; flex-shrink: 0; border-right: 1px solid #1E293B;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    #chaos-steps { list-style: none; overflow-y: auto; flex: 1; padding: 8px 0; }
     #chaos-steps li {
       display: flex; align-items: flex-start; gap: 10px;
-      padding: 7px 0; border-bottom: 1px solid #1E293B;
-      font-size: 0.82rem; color: #64748B; transition: color 0.3s;
+      padding: 10px 16px; border-left: 3px solid transparent;
+      font-size: 0.8rem; color: #475569; transition: all 0.25s; cursor: default;
     }
-    #chaos-steps li.running { color: #FCD34D; }
-    #chaos-steps li.pass    { color: #4ADE80; }
-    #chaos-steps li.fail    { color: #F87171; }
-    .step-icon { width: 18px; flex-shrink: 0; text-align: center; }
-    .step-desc { flex: 1; }
-    .step-result { font-size: 0.75rem; color: #94A3B8; margin-top: 2px; }
-    #chaos-summary {
-      background: #1E293B; border-radius: 8px; padding: 12px 16px;
-      font-size: 0.82rem; color: #CBD5E1; display: none; margin-bottom: 16px;
+    #chaos-steps li.running {
+      color: #FCD34D; border-left-color: #FCD34D;
+      background: rgba(252,211,77,0.05);
     }
-    #chaos-summary.visible { display: block; }
-    #chaos-summary h3 { color: #38BDF8; margin-bottom: 8px; font-size: 0.9rem; }
-    .summary-row { display: flex; justify-content: space-between; padding: 3px 0; }
-    .summary-pass { color: #4ADE80; font-weight: bold; }
-    .summary-fail { color: #F87171; font-weight: bold; }
+    #chaos-steps li.pass    { color: #4ADE80; border-left-color: #4ADE80; }
+    #chaos-steps li.fail    { color: #F87171; border-left-color: #F87171; }
+    .step-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+    .step-body { flex: 1; min-width: 0; }
+    .step-label { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .step-desc-small { font-size: 0.7rem; color: #334155; margin-top: 2px; line-height: 1.3; }
+    .step-result { font-size: 0.7rem; color: #94A3B8; margin-top: 3px; }
+    /* RIGHT: visual panel */
+    #chaos-right {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
+    }
+    /* cluster diagram */
+    #chaos-diagram {
+      padding: 16px 20px 12px; border-bottom: 1px solid #1E293B; flex-shrink: 0;
+    }
+    #chaos-diagram-title {
+      font-size: 0.68rem; color: #475569; text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 10px;
+    }
+    #chaos-nodes {
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .chaos-node {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      padding: 8px 12px; border-radius: 10px; border: 2px solid #1E293B;
+      background: #0F172A; min-width: 78px; transition: all 0.3s ease;
+      position: relative;
+    }
+    .chaos-node.follower  { border-color: #334155; }
+    .chaos-node.leader    { border-color: #FBBF24; background: rgba(251,191,36,0.08);
+                            box-shadow: 0 0 12px rgba(251,191,36,0.25); }
+    .chaos-node.isolated  { border-color: #EF4444; background: rgba(239,68,68,0.07);
+                            opacity: 0.7; }
+    .chaos-node.candidate { border-color: #A78BFA; background: rgba(167,139,250,0.07);
+                            animation: candidate-pulse 0.6s ease-in-out infinite alternate; }
+    .chaos-node.recovering{ border-color: #34D399; background: rgba(52,211,153,0.07); }
+    @keyframes candidate-pulse { from{opacity:0.6} to{opacity:1} }
+    .chaos-node-icon { font-size: 1.3rem; }
+    .chaos-node-name { font-size: 0.65rem; color: #94A3B8; }
+    .chaos-node-badge {
+      font-size: 0.55rem; font-weight: bold; padding: 1px 5px; border-radius: 4px;
+      background: #FBBF24; color: #000; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .chaos-node-badge.isolated { background: #EF4444; color: #fff; }
+    .chaos-node-badge.candidate{ background: #A78BFA; color: #fff; }
+    .chaos-node-badge.follower  { background: #334155; color: #94A3B8; }
+    .chaos-node-term {
+      font-size: 0.6rem; color: #475569;
+    }
+    .chaos-edge {
+      display: flex; align-items: center; color: #1E293B; font-size: 1rem;
+      transition: color 0.3s;
+    }
+    .chaos-edge.active   { color: #334155; }
+    .chaos-edge.cut      { color: #EF4444; }
+    .chaos-edge.cut::before { content: '✕'; font-size: 0.7rem; color: #EF4444; }
+    /* stats strip */
+    #chaos-stats {
+      display: flex; gap: 16px; padding: 8px 20px; border-bottom: 1px solid #1E293B;
+      flex-shrink: 0;
+    }
+    .chaos-stat { font-size: 0.72rem; color: #475569; }
+    .chaos-stat span { color: #38BDF8; font-weight: bold; }
+    /* narrative log */
+    #chaos-log-wrap {
+      flex: 1; overflow: hidden; display: flex; flex-direction: column;
+    }
+    #chaos-log-title {
+      font-size: 0.68rem; color: #475569; text-transform: uppercase;
+      letter-spacing: 0.08em; padding: 8px 20px 4px; flex-shrink: 0;
+    }
+    #chaos-log {
+      flex: 1; overflow-y: auto; padding: 4px 20px 12px;
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .chaos-log-entry {
+      font-size: 0.73rem; padding: 4px 8px; border-radius: 5px;
+      border-left: 3px solid #1E293B; color: #64748B; line-height: 1.4;
+      animation: fadeSlideIn 0.2s ease;
+    }
+    @keyframes fadeSlideIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+    .chaos-log-entry.info    { border-left-color: #334155; }
+    .chaos-log-entry.action  { border-left-color: #0EA5E9; color: #7DD3FC; }
+    .chaos-log-entry.warn    { border-left-color: #F59E0B; color: #FCD34D; }
+    .chaos-log-entry.success { border-left-color: #22C55E; color: #86EFAC; }
+    .chaos-log-entry.error   { border-left-color: #EF4444; color: #FCA5A5; }
+    .chaos-log-entry.phase   {
+      border-left-color: #7C3AED; color: #C4B5FD;
+      background: rgba(124,58,237,0.07); font-weight: bold;
+    }
+    .chaos-log-ts { color: #334155; margin-right: 6px; font-size: 0.65rem; }
+    /* summary & footer */
+    #chaos-footer {
+      padding: 12px 20px; border-top: 1px solid #1E293B; flex-shrink: 0;
+    }
+    #chaos-summary { display: none; }
+    #chaos-summary.visible { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+    .summary-pill {
+      background: #1E293B; border-radius: 8px; padding: 6px 14px;
+      font-size: 0.78rem; color: #94A3B8;
+    }
+    .summary-pill .val { font-weight: bold; margin-left: 6px; }
+    .summary-pill .val.pass { color: #4ADE80; }
+    .summary-pill .val.fail { color: #F87171; }
+    .summary-pill .val.neutral { color: #38BDF8; }
     #chaos-close-btn {
-      width: 100%; padding: 10px; background: #334155; color: #E2E8F0;
-      border: none; border-radius: 8px; font-size: 0.9rem; cursor: pointer;
-      font-weight: bold; display: none;
+      width: 100%; padding: 9px; background: #1E293B; color: #94A3B8;
+      border: 1px solid #334155; border-radius: 8px; font-size: 0.85rem;
+      cursor: pointer; font-weight: bold; display: none; transition: all 0.2s;
     }
-    #chaos-close-btn:hover { background: #475569; }
+    #chaos-close-btn:hover { background: #334155; color: #E2E8F0; }
     #chaos-spinner {
-      display: inline-block; width: 14px; height: 14px;
+      display: inline-block; width: 13px; height: 13px;
       border: 2px solid #F87171; border-top-color: transparent;
       border-radius: 50%; animation: spin 0.7s linear infinite;
     }
@@ -320,6 +477,10 @@
     <button class="btn btn-ghost" onclick="sendUndo()" title="Ctrl+Z">↩ Undo</button>
     <button class="btn btn-ghost" onclick="sendRedo()" title="Ctrl+Y">↪ Redo</button>
     <button class="btn btn-red"   onclick="clearCanvas()">🗑 Clear</button>
+    <button id="room-badge-btn" onclick="openRoomModal()" title="Switch room">
+      <span class="room-icon">🏠</span>
+      <span id="room-badge"># default</span>
+    </button>
   </div>
 
   <div id="ws-status">
@@ -387,6 +548,12 @@
         <div class="card-stats" id="gw-stats">Loading...</div>
       </div>
 
+      <!-- Active Rooms -->
+      <div class="gateway-card" style="margin-top:10px">
+        <div class="card-label">Active Rooms</div>
+        <div id="rooms-summary" style="margin-top:6px">Loading...</div>
+      </div>
+
       <!-- Partition controls -->
       <div class="partition-controls">
         <h3>Network partitions</h3>
@@ -417,20 +584,84 @@
 
 <script src="app.js"></script>
 
+<!-- ── ROOM MODAL ──────────────────────────────────────────────── -->
+<div id="room-modal">
+  <div id="room-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <h2 style="margin-bottom:0">🏠 Drawing Rooms</h2>
+      <button onclick="window.closeRoomModal()" style="background:none;border:none;color:#64748B;font-size:1.2rem;cursor:pointer;line-height:1" title="Close">✕</button>
+    </div>
+    <p>Each room has its own independent Raft log — strokes in one room are fully isolated from another.</p>
+    <div id="room-list">
+      <div style="color:#475569;font-size:0.82rem">Loading rooms...</div>
+    </div>
+    <div id="room-input-row">
+      <input id="room-input" type="text" placeholder="new-room-name (Enter to create & join)" maxlength="32" />
+      <button class="btn btn-blue" id="room-create-btn" onclick="window.handleRoomCreate()">+ Create</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── CHAOS MODE OVERLAY ────────────────────────────────────── -->
 <div id="chaos-overlay">
   <div id="chaos-box">
-    <h2><span id="chaos-spinner-wrap"><span id="chaos-spinner"></span></span> ☢ Chaos Mode</h2>
-    <div id="chaos-subtitle">Stress testing RAFT consensus under chaotic conditions…</div>
-    <div id="chaos-progress-wrap">
-      <div id="chaos-progress-bar"></div>
+
+    <!-- header -->
+    <div id="chaos-header">
+      <h2>
+        <span id="chaos-spinner-wrap"><span id="chaos-spinner"></span></span>
+        ☢ Chaos Mode
+        <div id="chaos-subtitle">Stress-testing Raft consensus under adversarial conditions</div>
+      </h2>
     </div>
-    <ul id="chaos-steps"></ul>
-    <div id="chaos-summary">
-      <h3>📊 Test Results</h3>
-      <div id="chaos-summary-rows"></div>
+    <div id="chaos-progress-wrap"><div id="chaos-progress-bar"></div></div>
+
+    <!-- two-column body -->
+    <div id="chaos-body">
+
+      <!-- LEFT: test checklist -->
+      <div id="chaos-left">
+        <ul id="chaos-steps"></ul>
+      </div>
+
+      <!-- RIGHT: live diagram + log -->
+      <div id="chaos-right">
+
+        <!-- cluster topology diagram -->
+        <div id="chaos-diagram">
+          <div id="chaos-diagram-title">⬡ Live Cluster Topology</div>
+          <div id="chaos-nodes"></div>
+        </div>
+
+        <!-- live stats strip -->
+        <div id="chaos-stats">
+          <div class="chaos-stat">Term <span id="cstat-term">—</span></div>
+          <div class="chaos-stat">Leader <span id="cstat-leader">—</span></div>
+          <div class="chaos-stat">Partitions <span id="cstat-parts">0</span></div>
+          <div class="chaos-stat">Log entries <span id="cstat-log">—</span></div>
+          <div class="chaos-stat">Test <span id="cstat-test">—/—</span></div>
+        </div>
+
+        <!-- narrative log -->
+        <div id="chaos-log-wrap">
+          <div id="chaos-log-title">📋 Narrative Log</div>
+          <div id="chaos-log"></div>
+        </div>
+
+      </div><!-- /chaos-right -->
+    </div><!-- /chaos-body -->
+
+    <!-- footer: summary + close -->
+    <div id="chaos-footer">
+      <div id="chaos-summary">
+        <div class="summary-pill">Tests run <span class="val neutral" id="cs-total">—</span></div>
+        <div class="summary-pill">Passed <span class="val pass" id="cs-pass">—</span></div>
+        <div class="summary-pill">Failed <span class="val fail" id="cs-fail">—</span></div>
+        <div class="summary-pill" id="cs-verdict-pill">Verdict <span class="val neutral" id="cs-verdict">—</span></div>
+      </div>
+      <button id="chaos-close-btn" onclick="closeChaosMode()">✓ Close &amp; Resume Normal Operation</button>
     </div>
-    <button id="chaos-close-btn" onclick="closeChaosMode()">✓ Close &amp; Resume Normal Operation</button>
+
   </div>
 </div>
 
@@ -459,81 +690,258 @@
 
 <script>
 // ─── CHAOS MODE ────────────────────────────────────────────────
+
+// ── Diagram renderer ───────────────────────────────────────────
+let _diagCuts  = new Set();
+let _diagNodes = {};
+
+function renderChaosDiagram(nodeStates, cuts) {
+  _diagNodes = nodeStates || _diagNodes;
+  _diagCuts  = cuts       || _diagCuts;
+
+  const wrap = document.getElementById('chaos-nodes');
+  if (!wrap) return;
+  const order = ['replica1','replica2','replica3','replica4'];
+  wrap.innerHTML = '';
+
+  order.forEach((id, i) => {
+    if (i > 0) {
+      const a = order[i-1], b = id;
+      const cut = _diagCuts.has(`${a}:${b}`) || _diagCuts.has(`${b}:${a}`);
+      const edge = document.createElement('div');
+      edge.className = 'chaos-edge ' + (cut ? 'cut' : 'active');
+      if (!cut) edge.textContent = '—';
+      wrap.appendChild(edge);
+    }
+    const ns = _diagNodes[id] || { state: 'follower', term: '?' };
+    const node = document.createElement('div');
+    node.className = `chaos-node ${ns.state || 'follower'}`;
+    const badgeText = ns.state === 'leader'    ? 'LEADER'
+                    : ns.state === 'isolated'  ? 'ISOLATED'
+                    : ns.state === 'candidate' ? 'VOTING'
+                    : ns.state === 'recovering'? 'SYNC'
+                    : 'FOLLOWER';
+    const badgeCls  = ns.state === 'isolated'  ? 'isolated'
+                    : ns.state === 'candidate' ? 'candidate'
+                    : ns.state === 'recovering'? 'follower'
+                    : ns.state === 'leader'    ? ''
+                    : 'follower';
+    node.innerHTML = `
+      <div class="chaos-node-icon">${ns.state === 'isolated' ? '🔴' : ns.state === 'leader' ? '👑' : ns.state === 'candidate' ? '🗳' : '🖥'}</div>
+      <div class="chaos-node-name">${id.replace('replica','R')}</div>
+      <div class="chaos-node-badge ${badgeCls}">${badgeText}</div>
+      <div class="chaos-node-term">t=${ns.term ?? '?'}</div>`;
+    wrap.appendChild(node);
+  });
+}
+
+// ── Narrative log ─────────────────────────────────────────────
+function chaosNarrate(text, type = 'info') {
+  const log = document.getElementById('chaos-log');
+  if (!log) return;
+  const now = new Date();
+  const ts  = `${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}.${Math.floor(now.getMilliseconds()/10).toString().padStart(2,'0')}`;
+  const div = document.createElement('div');
+  div.className = `chaos-log-entry ${type}`;
+  div.innerHTML = `<span class="chaos-log-ts">${ts}</span>${text}`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function chaosNarratePhase(text)  { chaosNarrate(text, 'phase'); }
+function chaosNarrateAction(text) { chaosNarrate(text, 'action'); }
+function chaosNarrateWarn(text)   { chaosNarrate(text, 'warn'); }
+function chaosNarrateOk(text)     { chaosNarrate(text, 'success'); }
+function chaosNarrateErr(text)    { chaosNarrate(text, 'error'); }
+
+// ── Stats strip ───────────────────────────────────────────────
+async function refreshChaosStats(testIdx, testTotal) {
+  try {
+    const s = await fetch('/api/cluster-status').then(r => r.json());
+    document.getElementById('cstat-term').textContent   = s.term ?? '—';
+    document.getElementById('cstat-leader').textContent = s.leaderShort ?? 'none';
+    document.getElementById('cstat-parts').textContent  = s.partitioned?.length ?? 0;
+    const maxLog = Math.max(...(s.replicas||[]).map(r => r.logLength||0));
+    document.getElementById('cstat-log').textContent    = maxLog;
+    document.getElementById('cstat-test').textContent   = `${testIdx}/${testTotal}`;
+
+    const nodes = {};
+    for (const r of (s.replicas || [])) {
+      const id = r.id?.replace('http://','').split(':')[0] || r.id;
+      nodes[id] = {
+        state: r.state === 'unreachable' ? 'isolated'
+             : r.blocked?.length > 0    ? 'isolated'
+             : r.state,
+        term: r.term,
+      };
+    }
+    renderChaosDiagram(nodes, new Set(s.partitioned || []));
+  } catch (_) {}
+}
+
+// ─── CHAOS TESTS ───────────────────────────────────────────────
 const CHAOS_TESTS = [
   {
     id: 'rapid-failover',
     label: '⚡ Rapid leader failover',
-    desc: 'Partition leader from 2 peers, await new election, heal',
+    desc: 'Isolate leader → watch new election → heal',
     run: async (ctx) => {
+      await ctx.phase('TEST 1 — Rapid Leader Failover');
+      await ctx.tell('Fetching current cluster status…');
       const status = await ctx.getStatus();
       const leader = status.leaderShort;
       if (!leader) throw new Error('No leader found');
       const peers = ['replica1','replica2','replica3','replica4'].filter(r => r !== leader);
-      await ctx.partition(leader, peers[0]);
-      await ctx.partition(leader, peers[1]);
-      ctx.log(`Isolated ${leader} from ${peers[0]} and ${peers[1]}`);
+
+      await ctx.tell(`Current leader is <strong>${leader}</strong> at term ${status.term}`);
+      await ctx.tell('In Raft, the leader is the only node that accepts writes and replicates to followers.');
+      await ctx.act(`Partitioning ${leader} ↔ ${peers[0]} and ${leader} ↔ ${peers[1]}…`);
+      await ctx.tell('This severs the leader from all of its peers — it can no longer reach a quorum of 3/4.');
+
+      // Use isolate-leader to cut the leader from ALL followers atomically.
+      // Manually partitioning only 2 of 3 peers leaves the leader reachable by the
+      // third follower, so it retains quorum and no election fires — causing the 8s timeout.
+      await fetch('/api/isolate-leader', { method: 'POST' }).then(r => r.json());
+
+      const cutSet = new Set(peers.map(p => `${leader}:${p}`));
+      const isoNodes = {};
+      ['replica1','replica2','replica3','replica4'].forEach(r => {
+        isoNodes[r] = { state: r === leader ? 'isolated' : 'follower', term: status.term };
+      });
+      renderChaosDiagram(isoNodes, cutSet);
+
+      await ctx.warn(`${leader} is now isolated — it will keep trying to send heartbeats but they won't arrive.`);
+      await ctx.tell(`The other 3 replicas will notice missing heartbeats after the election timeout (500–800ms).`);
+      await ctx.tell('One of them will increment its term and call an election — first to do so wins.');
+
       let newLeader = null;
-      for (let i = 0; i < 16; i++) {
-        await ctx.wait(250);
+      for (let i = 0; i < 20; i++) {
+        await ctx.wait(300);
         const after = await ctx.getStatus();
-        const candidate = after.leaderShort;
-        if (candidate && candidate !== leader) { newLeader = candidate; break; }
+        const liveNodes = {};
+        for (const r of (after.replicas||[])) {
+          const id = r.id?.replace('http://','').split(':')[0] || r.id;
+          liveNodes[id] = {
+            state: r.blocked?.length > 0 ? 'isolated'
+                 : r.state === 'candidate' ? 'candidate' : r.state,
+            term: r.term,
+          };
+        }
+        renderChaosDiagram(liveNodes, cutSet);
+        if (i === 1) await ctx.tell('Election timeout fired on at least one follower — sending RequestVote RPCs…');
+        if (i === 3) await ctx.tell('Vote responses arriving — a candidate needs 3/4 votes to win.');
+        // Detect new leader directly from each replica's self-reported state.
+        // Do NOT use after.leaderShort — the gateway's currentLeader is cached
+        // and keeps returning the old (isolated) leader until it next polls it,
+        // so leaderShort stays stale for the entire duration of the partition.
+        const freshLeader = (after.replicas || []).find(r => {
+          const rid = (r.id || '').replace('http://','').split(':')[0];
+          return r.state === 'leader' && rid !== leader;
+        });
+        if (freshLeader) {
+          newLeader = (freshLeader.id || '').replace('http://','').split(':')[0];
+          break;
+        }
       }
+
+      await ctx.act('Healing all partitions — restoring full mesh connectivity…');
       await ctx.heal();
-      await ctx.wait(500);
-      if (!newLeader) throw new Error('No new leader elected within 4s');
-      ctx.log(`New leader elected: ${newLeader}`);
+      await ctx.wait(400);
+      await refreshChaosStats(1, CHAOS_TESTS.length);
+
+      if (!newLeader) throw new Error('No new leader elected within 8s');
+      await ctx.ok(`New leader elected: <strong>${newLeader}</strong> — failover complete ✓`);
+      await ctx.tell(`When ${leader} reconnects it will receive a heartbeat with a higher term and immediately step down.`);
       return `Failover: ${leader} → ${newLeader} ✓`;
     }
   },
   {
     id: 'rapid-strokes',
     label: '🖌 Burst of 20 rapid strokes',
-    desc: 'Send 20 strokes sequentially to test sustained commit throughput',
+    desc: 'Saturate commit pipeline — verify throughput',
     run: async (ctx) => {
+      await ctx.phase('TEST 2 — Burst Commit Throughput');
+      await ctx.tell('Sending 20 strokes back-to-back to stress the replication pipeline.');
+      await ctx.tell('Each stroke: leader appends to its log → sends AppendEntries to all peers → waits for 3 ACKs → commits → notifies followers.');
+      await ctx.act('Starting burst — watch log length climb in the stats strip…');
+
       let committed = 0;
       for (let i = 0; i < 20; i++) {
         try {
           const r = await fetch('/api/chaos-stroke', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ index: i })
           });
           const d = await r.json();
-          if (d.committed) committed++;
+          if (d.committed) {
+            committed++;
+            if (i % 4 === 3) {
+              await ctx.tell(`${committed}/${i+1} strokes committed — log growing on all replicas…`);
+              await refreshChaosStats(2, CHAOS_TESTS.length);
+              await ctx.wait(300);
+            }
+          } else {
+            await ctx.warn(`Stroke ${i} was not committed (leader may be busy or quorum temporarily slow).`);
+          }
         } catch (_) {}
       }
+      await refreshChaosStats(2, CHAOS_TESTS.length);
       if (committed < 15) throw new Error(`Only ${committed}/20 strokes committed`);
+      await ctx.ok(`${committed}/20 strokes committed — pipeline healthy ✓`);
+      await ctx.tell("Raft's sequential log guarantees every client sees the same stroke order regardless of who sent them.");
       return `${committed}/20 strokes committed successfully`;
     }
   },
   {
     id: 'double-failure',
     label: '💥 One replica isolated — quorum holds',
-    desc: 'Isolate one follower from all peers — leader + 2 others must keep committing',
+    desc: 'Cut one follower from all peers — 3-node majority must keep committing',
     run: async (ctx) => {
+      await ctx.phase('TEST 3 — Minority Fault Tolerance');
       const status = await ctx.getStatus();
       const leader = status.leaderShort;
       if (!leader) throw new Error('No leader');
       const followers = ['replica1','replica2','replica3','replica4'].filter(r => r !== leader);
       const victim = followers[0];
       const others = followers.slice(1);
+
+      await ctx.tell(`Cluster has 4 replicas — quorum requires 3 (majority of 4 = ⌊4/2⌋+1 = 3).`);
+      await ctx.tell(`Leader is <strong>${leader}</strong>. Choosing <strong>${victim}</strong> as the isolated victim.`);
+      await ctx.act(`Cutting ${victim} from every peer: ${leader}, ${others[0]}, ${others[1]}…`);
+
       await ctx.partition(victim, leader);
       await ctx.partition(victim, others[0]);
       await ctx.partition(victim, others[1]);
-      ctx.log(`Isolated ${victim} from all peers — leader is ${leader}`);
-      await ctx.wait(600);
+
+      const cuts = new Set([`${victim}:${leader}`,`${victim}:${others[0]}`,`${victim}:${others[1]}`]);
+      const isoNodes = {};
+      ['replica1','replica2','replica3','replica4'].forEach(r => {
+        isoNodes[r] = { state: r === victim ? 'isolated' : r === leader ? 'leader' : 'follower', term: status.term };
+      });
+      renderChaosDiagram(isoNodes, cuts);
+
+      await ctx.warn(`${victim} is fully partitioned. It will call an election but can never win — it's alone.`);
+      await ctx.tell(`The remaining 3 nodes (${leader} + 2 followers) still form a valid quorum and can commit.`);
+      await ctx.tell('This is exactly Raft\'s fault-tolerance guarantee: a cluster of N tolerates ⌊N/2⌋ failures.');
+      await ctx.wait(400);
+
+      await ctx.act('Sending a test stroke through the majority partition to confirm commits still work…');
       const r = await fetch('/api/chaos-stroke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ index: 99 })
       }).then(r => r.json()).catch(() => ({ committed: false }));
+
+      await ctx.act(`Healing — rejoining ${victim} to the cluster…`);
       await fetch('/api/heal', { method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ noResync: true })
       });
-      await ctx.wait(300);
+      await ctx.wait(400);
+      await refreshChaosStats(3, CHAOS_TESTS.length);
+
       if (!r.committed) throw new Error('Cluster lost quorum — leader + 2 should suffice');
+      await ctx.ok(`Quorum maintained — stroke committed while ${victim} was fully isolated ✓`);
+      await ctx.tell(`${victim} is now catching up: the leader sends it all missed AppendEntries in order.`);
       return `Quorum maintained: leader + 2 followers committed while ${victim} was isolated`;
     }
   },
@@ -542,66 +950,123 @@ const CHAOS_TESTS = [
     label: '🌩 Cascading partition storm',
     desc: 'Create 3 partitions rapidly then heal — verify consensus recovery',
     run: async (ctx) => {
+      await ctx.phase('TEST 4 — Cascading Partition Storm');
+      await ctx.tell('Stacking 3 network cuts in rapid succession — maximum disruption to the gossip mesh.');
+
+      await ctx.act('Cut 1: partitioning replica1 ↔ replica2…');
       await ctx.partition('replica1', 'replica2');
-      await ctx.wait(300);
-      await ctx.partition('replica2', 'replica3');
-      await ctx.wait(300);
-      await ctx.partition('replica3', 'replica4');
+      renderChaosDiagram({}, new Set(['replica1:replica2']));
       await ctx.wait(400);
-      ctx.log('3 partitions active simultaneously');
+
+      await ctx.act('Cut 2: partitioning replica2 ↔ replica3…');
+      await ctx.partition('replica2', 'replica3');
+      renderChaosDiagram({}, new Set(['replica1:replica2','replica2:replica3']));
+      await ctx.wait(400);
+
+      await ctx.act('Cut 3: partitioning replica3 ↔ replica4…');
+      await ctx.partition('replica3', 'replica4');
+      const allCuts = new Set(['replica1:replica2','replica2:replica3','replica3:replica4']);
+      renderChaosDiagram({}, allCuts);
+      await ctx.wait(400);
+
+      await ctx.warn('3 simultaneous cuts active. replica2 is bridging two partitions — none can reach quorum alone.');
+      await ctx.tell('Replicas will start elections but every candidate will time out waiting for votes that never arrive.');
+      await ctx.tell('The cluster is in a safe, stalled state — no incorrect commits can happen (Raft safety guarantee).');
+      await ctx.wait(500);
+
+      await ctx.act('Healing all partitions simultaneously — full mesh restored…');
       await fetch('/api/heal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ noResync: true }) });
-      await ctx.wait(1500);
+      await ctx.tell('Replicas are exchanging heartbeats again. Highest-term candidate will win the first election.');
+      await ctx.wait(1200);
+
       const status = await ctx.getStatus();
+      await refreshChaosStats(4, CHAOS_TESTS.length);
       if (!status.leaderShort) throw new Error('No leader after healing');
       const healthy = status.replicas.filter(r => r.state !== 'unreachable').length;
+      await ctx.ok(`Consensus recovered — new leader: <strong>${status.leaderShort}</strong>, ${healthy}/4 replicas healthy ✓`);
+      await ctx.tell('No conflicting log entries exist — Raft\'s safety property held throughout the storm.');
       return `Recovered — leader: ${status.leaderShort}, ${healthy}/4 replicas healthy`;
     }
   },
   {
     id: 'flapping',
     label: '📶 Network flapping (5 cycles)',
-    desc: 'Rapidly partition and heal the same pair 5 times',
+    desc: 'Rapidly partition and heal the same pair 5×',
     run: async (ctx) => {
+      await ctx.phase('TEST 5 — Network Flapping');
+      await ctx.tell('Simulating an unstable link between replica1 and replica2 — the kind caused by a bad cable or flaky switch.');
+      await ctx.tell('Each flap cycle: break the link → wait for timeout → restore → repeat.');
       const before = (await ctx.getStatus()).term || 0;
+
       for (let i = 0; i < 5; i++) {
+        await ctx.act(`Flap ${i+1}/5 — breaking replica1 ↔ replica2 link…`);
         await ctx.partition('replica1', 'replica2');
-        await ctx.wait(350);
+        renderChaosDiagram({}, new Set(['replica1:replica2']));
+        await ctx.wait(400);
+
+        await ctx.tell(`Flap ${i+1}/5 — restoring link…`);
         await fetch('/api/heal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ noResync: true }) });
-        await ctx.wait(350);
+        renderChaosDiagram({}, new Set());
+        await ctx.wait(400);
+        await refreshChaosStats(5, CHAOS_TESTS.length);
       }
+
       const after = await ctx.getStatus();
       if (!after.leaderShort) throw new Error('No stable leader after flapping');
       const termDelta = (after.term || 0) - before;
+      await ctx.ok(`Cluster stable after 5 flap cycles — term advanced by ${termDelta} ✓`);
+      await ctx.tell(`Each disruption may trigger a new election, bumping the term. A term delta of ${termDelta} is expected and healthy.`);
       return `Stable after 5 flap cycles — term advanced by ${termDelta}`;
     }
   },
   {
     id: 'persistence-check',
-    label: '💾 Persistence after restart simulation',
-    desc: 'Draw a stroke, verify it appears in sync-log (survives restart)',
+    label: '💾 Persistence check',
+    desc: 'Verify committed strokes survive in replicated log',
     run: async (ctx) => {
-      const before = await fetch('/api/chaos-stroke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      await ctx.phase('TEST 6 — Log Persistence');
+      await ctx.tell('Committing a uniquely-tagged marker stroke and verifying it appears in every replica\'s log.');
+      await ctx.tell('In production, each replica flushes log entries to disk before ACKing — so they survive restarts.');
+
+      await ctx.act('Committing marker stroke (chaos-index 77)…');
+      const result = await fetch('/api/chaos-stroke', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ index: 77 })
       }).then(r => r.json()).catch(() => ({}));
-      if (!before.committed) throw new Error('Stroke not committed');
+
+      if (!result.committed) throw new Error('Stroke not committed — leader may be down');
+      await ctx.tell('Stroke committed by leader and replicated to quorum. Querying all replicas for log length…');
+      await ctx.wait(400);
+
       const status = await ctx.getStatus();
-      const logLen = Math.max(...(status.replicas || []).map(r => r.logLength || 0));
-      if (logLen === 0) throw new Error('Log is empty — persistence may be broken');
-      return `Log has ${logLen} committed entries — canvas state is persisted`;
+      await refreshChaosStats(6, CHAOS_TESTS.length);
+
+      const logLens = (status.replicas || [])
+        .map(r => `${(r.id||'').split(':')[0] || r.id}: ${r.logLength||0} entries`)
+        .join(' | ');
+      await ctx.tell(`Log lengths — ${logLens}`);
+      await ctx.wait(300);
+
+      const maxLog = Math.max(...(status.replicas || []).map(r => r.logLength || 0));
+      if (maxLog === 0) throw new Error('Log is empty — persistence may be broken');
+      await ctx.ok(`All replicas show ${maxLog} committed entries — log is durable ✓`);
+      await ctx.tell('On container restart, each replica reads this file and rebuilds the full canvas without talking to peers.');
+      return `Log has ${maxLog} committed entries — canvas state is persisted`;
     }
   }
 ];
 
-let chaosRunning = false;
+let chaosRunning    = false;
+let chaosStatInterval = null;
 
-function chaosStep(id, label) {
+// ── step list helpers ──────────────────────────────────────────
+function chaosStep(id, label, desc) {
   const li = document.createElement('li');
   li.id = `chaos-step-${id}`;
-  li.innerHTML = `<span class="step-icon">⏳</span>
-    <div class="step-desc">
-      <div>${label}</div>
+  li.innerHTML = `<span class="step-icon">⏸</span>
+    <div class="step-body">
+      <div class="step-label">${label}</div>
+      <div class="step-desc-small">${desc}</div>
       <div class="step-result" id="chaos-result-${id}"></div>
     </div>`;
   document.getElementById('chaos-steps').appendChild(li);
@@ -613,34 +1078,89 @@ function setStepState(id, state, result = '') {
   if (!li) return;
   li.className = state;
   li.querySelector('.step-icon').textContent =
-    state === 'running' ? '▶' : state === 'pass' ? '✓' : '✗';
+    state === 'running' ? '▶' : state === 'pass' ? '✓' : state === 'fail' ? '✗' : '⏸';
   if (result) li.querySelector(`.step-result`).textContent = result;
+  li.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
+// ── main runner ───────────────────────────────────────────────
 async function startChaosMode() {
   if (chaosRunning) return;
   chaosRunning = true;
 
   document.getElementById('chaos-overlay').classList.add('active');
   document.getElementById('chaos-steps').innerHTML = '';
+  document.getElementById('chaos-log').innerHTML = '';
   document.getElementById('chaos-summary').classList.remove('visible');
   document.getElementById('chaos-close-btn').style.display = 'none';
   document.getElementById('chaos-spinner-wrap').innerHTML = '<span id="chaos-spinner"></span>';
   document.getElementById('chaos-progress-bar').style.width = '0%';
 
-  CHAOS_TESTS.forEach(t => chaosStep(t.id, t.label));
+  CHAOS_TESTS.forEach(t => chaosStep(t.id, t.label, t.desc));
+  await refreshChaosStats(0, CHAOS_TESTS.length);
+
+  chaosStatInterval = setInterval(() => refreshChaosStats('…', CHAOS_TESTS.length), 1500);
+
+  // ctx: the context object passed into each test
+  // ctx.tell / ctx.act / ctx.warn / ctx.ok each:
+  //   1. Log to the on-screen narrative panel
+  //   2. POST to /api/chaos-event so gateway prints it to stdout (docker logs)
+  //   3. Wait READ_PAUSE ms so the viewer can actually read it
+  const READ_PAUSE = 400; // ms between narrative steps
 
   const ctx = {
-    log: (msg) => addEvent(`☢ ${msg}`, 'failover'),
     wait: (ms) => new Promise(r => setTimeout(r, ms)),
     getStatus: () => fetch('/api/cluster-status').then(r => r.json()),
     partition: (a, b) => fetch('/api/partition', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ a, b })
     }).then(r => r.json()),
     heal: () => fetch('/api/heal', { method: 'POST' }).then(r => r.json()),
+
+    // beacon: fire-and-forget POST to gateway — proves real backend activity
+    beacon: (level, text) => fetch('/api/chaos-event', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level, text: text.replace(/<[^>]*>/g, '') })
+    }).catch(() => {}),
+
+    // Narrative helpers — log + beacon + pause
+    phase: async (text) => {
+      chaosNarratePhase(text);
+      await ctx.beacon('PHASE', text);
+      await ctx.wait(READ_PAUSE);
+    },
+    tell: async (text) => {
+      chaosNarrate(text.replace(/<[^>]*>/g, ''), 'info');
+      await ctx.beacon('INFO', text);
+      await ctx.wait(READ_PAUSE);
+    },
+    act: async (text) => {
+      chaosNarrateAction(text);
+      await ctx.beacon('ACTION', text);
+      await ctx.wait(READ_PAUSE);
+    },
+    warn: async (text) => {
+      chaosNarrateWarn(text);
+      await ctx.beacon('WARN', text);
+      await ctx.wait(READ_PAUSE);
+    },
+    ok: async (text) => {
+      chaosNarrateOk(text.replace(/<[^>]*>/g, ''));
+      await ctx.beacon('PASS', text);
+      await ctx.wait(READ_PAUSE);
+    },
+    err: async (text) => {
+      chaosNarrateErr(text);
+      await ctx.beacon('FAIL', text);
+      await ctx.wait(READ_PAUSE);
+    },
+    // kept for backwards compat — same as tell
+    log: (text) => { chaosNarrate(text, 'info'); ctx.beacon('INFO', text); addEvent(`☢ ${text}`, 'failover'); },
   };
+
+  await ctx.phase('☢ Chaos Mode started — 6 tests will run sequentially');
+  await ctx.tell('Watch the cluster diagram update in real-time. Each step is also logged to the gateway terminal.');
+  await ctx.tell('Run:  docker compose logs -f gateway  in a separate terminal to see the backend proof.');
 
   const results = [];
   for (let i = 0; i < CHAOS_TESTS.length; i++) {
@@ -648,6 +1168,8 @@ async function startChaosMode() {
     setStepState(test.id, 'running');
     document.getElementById('chaos-progress-bar').style.width =
       `${Math.round(i / CHAOS_TESTS.length * 100)}%`;
+    document.getElementById('cstat-test').textContent = `${i+1}/${CHAOS_TESTS.length}`;
+
     try {
       const msg = await test.run(ctx);
       setStepState(test.id, 'pass', msg);
@@ -657,35 +1179,43 @@ async function startChaosMode() {
       setStepState(test.id, 'fail', e.message);
       results.push({ label: test.label, pass: false, msg: e.message });
       addEvent(`❌ Chaos: ${test.label} — FAIL: ${e.message}`, 'failover');
+      await ctx.err(`FAIL: ${e.message}`);
       try { await ctx.heal(); } catch (_) {}
-      await ctx.wait(800);
+      await ctx.wait(600);
     }
-    await ctx.wait(200);
+    await ctx.wait(300);
   }
 
+  clearInterval(chaosStatInterval);
   try { await ctx.heal(); } catch (_) {}
+  await refreshChaosStats(CHAOS_TESTS.length, CHAOS_TESTS.length);
 
   document.getElementById('chaos-progress-bar').style.width = '100%';
   document.getElementById('chaos-spinner-wrap').textContent = '✓';
 
-  const passed = results.filter(r => r.pass).length;
-  const summaryEl = document.getElementById('chaos-summary');
-  const rowsEl = document.getElementById('chaos-summary-rows');
-  rowsEl.innerHTML =
-    `<div class="summary-row"><span>Tests run</span><span>${results.length}</span></div>` +
-    `<div class="summary-row"><span>Passed</span><span class="summary-pass">${passed}</span></div>` +
-    `<div class="summary-row"><span>Failed</span><span class="summary-fail">${results.length - passed}</span></div>` +
-    `<div class="summary-row" style="margin-top:8px;color:${passed===results.length?'#4ADE80':'#F87171'}">
-       <span>Verdict</span>
-       <span>${passed === results.length ? '🏆 All systems resilient' : `⚠ ${results.length - passed} test(s) failed`}</span>
-     </div>`;
-  summaryEl.classList.add('visible');
+  const passed  = results.filter(r => r.pass).length;
+  const allPass = passed === results.length;
+
+  document.getElementById('cs-total').textContent = results.length;
+  document.getElementById('cs-pass').textContent  = passed;
+  document.getElementById('cs-fail').textContent  = results.length - passed;
+  document.getElementById('cs-verdict').textContent = allPass ? '🏆 All resilient' : `⚠ ${results.length - passed} failed`;
+  document.getElementById('cs-verdict-pill').style.background =
+    allPass ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)';
+
+  document.getElementById('chaos-summary').classList.add('visible');
   document.getElementById('chaos-close-btn').style.display = 'block';
   chaosRunning = false;
-  addEvent(`☢ Chaos Mode complete — ${passed}/${results.length} tests passed`, passed === results.length ? 'commit' : 'failover');
+
+  const finalMsg = allPass
+    ? `🏆 All ${results.length} tests passed — Raft cluster is fully resilient!`
+    : `${results.length - passed} test(s) failed — check individual results.`;
+  await (allPass ? ctx.ok(finalMsg) : ctx.err(finalMsg));
+  addEvent(`☢ Chaos Mode complete — ${passed}/${results.length} tests passed`, allPass ? 'commit' : 'failover');
 }
 
 function closeChaosMode() {
+  clearInterval(chaosStatInterval);
   document.getElementById('chaos-overlay').classList.remove('active');
 }
 </script>

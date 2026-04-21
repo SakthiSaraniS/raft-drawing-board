@@ -1,3 +1,13 @@
+// ─── ROOM STATE ────────────────────────────────────────────────
+// currentRoom is set from the URL hash: /#design-sprint
+// If no hash is present, we fall back to 'default'.
+let currentRoom = (location.hash.slice(1) || 'default').toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'default';
+
+function setRoomFromHash() {
+  const raw = location.hash.slice(1) || 'default';
+  return raw.toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'default';
+}
+
 // ─── CANVAS ────────────────────────────────────────────────────
 const canvas = document.getElementById('board');
 const ctx    = canvas.getContext('2d');
@@ -5,13 +15,13 @@ let drawing  = false;
 let color    = '#38BDF8';
 let brushSz  = 4;
 let path     = [];
-let strokes  = []; // all committed strokes, used for full redraw on undo
+let strokes  = []; // all committed strokes for current room
 
 function resize() {
   const wrap = document.getElementById('canvas-wrap');
   canvas.width  = wrap.clientWidth;
   canvas.height = wrap.clientHeight;
-  redraw(); // re-render after resize so strokes aren't wiped
+  redraw();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -48,6 +58,7 @@ canvas.addEventListener('pointerup', () => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       type: 'stroke',
+      room: currentRoom,
       data: { path, color, size: brushSz }
     }));
   }
@@ -78,20 +89,27 @@ function redraw() {
 }
 
 function clearCanvas() {
-  strokes = [];
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Send a clear command through the Raft log so all clients in the room
+  // see the clear — including new joiners who replay the log on connect.
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'clear', room: currentRoom }));
+  } else {
+    // Fallback: local-only clear if WS is down
+    strokes = [];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
 }
 
 // ─── UNDO / REDO ───────────────────────────────────────────────
 function sendUndo() {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'undo' }));
+    ws.send(JSON.stringify({ type: 'undo', room: currentRoom }));
   }
 }
 
 function sendRedo() {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'redo' }));
+    ws.send(JSON.stringify({ type: 'redo', room: currentRoom }));
   }
 }
 
@@ -107,12 +125,16 @@ const dot   = document.getElementById('ws-dot');
 const label = document.getElementById('ws-label');
 
 function connectWS() {
-  ws = new WebSocket(`ws://${location.host}`);
+  // Pass the current room as a query param so the gateway
+  // immediately syncs this room's log on connection.
+  const wsUrl = `ws://${location.host}/?room=${encodeURIComponent(currentRoom)}`;
+  ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     dot.classList.remove('offline');
-    label.textContent = 'Connected';
-    addEvent('WebSocket connected', 'commit');
+    label.textContent = `Connected · #${currentRoom}`;
+    addEvent(`WebSocket connected (room: ${currentRoom})`, 'commit');
+    updateRoomBadge();
   };
 
   ws.onclose = () => {
@@ -131,53 +153,226 @@ function connectWS() {
     try {
       const msg = JSON.parse(e.data);
 
+      // Only process messages for the current room
+      // (server also filters, but guard here for safety)
+      // NOTE: 'room-joined' and 'sync' must NEVER be filtered — they are
+      // the messages that establish the new room context itself.
+      const roomScopedTypes = ['stroke', 'undo', 'redo', 'clear'];
+      if (roomScopedTypes.includes(msg.type) &&
+          msg.room && msg.room !== currentRoom) {
+        return;
+      }
+
+      // ── sync (initial canvas state on connect) ─────────────
       if (msg.type === 'sync') {
-        // Two-pass replay matching replica's getUndoRedoState() logic:
-        // Pass 1 — find net-cancelled IDs (cancel entries that were not
-        //           subsequently overwritten by a redo of the same stroke)
         const cancelledIds = new Set();
+        let syncedStrokes = [];
         for (const entry of msg.entries) {
-          if (entry.type === 'cancel') {
+          if (entry.type === 'clear') {
+            // Clear wipes everything committed before it
+            syncedStrokes = [];
+            cancelledIds.clear();
+          } else if (entry.type === 'cancel') {
             cancelledIds.add(entry.targetId);
-          } else if (entry.id) {
-            // A stroke re-appearing (redo) removes it from cancelled set
-            cancelledIds.delete(entry.id);
-          }
-        }
-        // Pass 2 — collect visible strokes in order, skipping cancelled ones
-        const syncedStrokes = [];
-        for (const entry of msg.entries) {
-          if (entry.type !== 'cancel' && entry.id && !cancelledIds.has(entry.id)) {
+          } else if (entry.id && !cancelledIds.has(entry.id)) {
             syncedStrokes.push(entry);
           }
         }
         strokes = syncedStrokes;
         redraw();
+        addEvent(`Synced ${syncedStrokes.length} strokes for room "${msg.room || currentRoom}"`, 'commit');
       }
 
+      // ── room-joined (after a join-room message) ─────────────
+      if (msg.type === 'room-joined') {
+        currentRoom = msg.room;
+        updateRoomBadge();
+        label.textContent = `Connected · #${currentRoom}`;
+
+        const cancelledIds = new Set();
+        let syncedStrokes = [];
+        for (const entry of msg.entries) {
+          if (entry.type === 'clear') {
+            syncedStrokes = [];
+            cancelledIds.clear();
+          } else if (entry.type === 'cancel') {
+            cancelledIds.add(entry.targetId);
+          } else if (entry.id && !cancelledIds.has(entry.id)) {
+            syncedStrokes.push(entry);
+          }
+        }
+        strokes = syncedStrokes;
+        redraw();
+        addEvent(`Joined room "${currentRoom}" — ${syncedStrokes.length} strokes`, 'commit');
+        refreshRoomList();
+      }
+
+      // ── stroke ─────────────────────────────────────────────
       if (msg.type === 'stroke') {
         strokes.push(msg.data);
         drawFullStroke(msg.data);
       }
 
+      // ── undo ───────────────────────────────────────────────
       if (msg.type === 'undo') {
-        // Remove the cancelled stroke by ID and redraw from scratch
         strokes = strokes.filter(s => s.id !== msg.targetId);
         redraw();
         addEvent(`↩ Undo — stroke ${(msg.targetId || '').slice(0, 8)} removed`, 'failover');
       }
 
+      // ── redo ───────────────────────────────────────────────
       if (msg.type === 'redo') {
-        // Re-add the restored stroke (already carries its original ID)
         strokes.push(msg.data);
         drawFullStroke(msg.data);
         addEvent(`↪ Redo — stroke ${(msg.data?.id || '').slice(0, 8)} restored`, 'commit');
+      }
+
+      // ── clear ──────────────────────────────────────────────
+      if (msg.type === 'clear') {
+        strokes = [];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        addEvent('🗑 Canvas cleared', 'failover');
+      }
+
+      // ── cluster events (not room-scoped) ───────────────────
+      if (msg.type === 'leaderIsolated') {
+        addEvent(`🔴 Leader isolated: ${msg.leader}`, 'failover');
+      }
+
+      if (msg.type === 'clusterChanged') {
+        addEvent(`🔵🟢 Cluster ${msg.event}: ${msg.replica} (size: ${msg.size})`, 'bluegreen');
       }
 
     } catch (_) {}
   };
 }
 connectWS();
+
+// ─── ROOM SWITCHER ─────────────────────────────────────────────
+
+function updateRoomBadge() {
+  const badge = document.getElementById('room-badge');
+  if (badge) badge.textContent = `# ${currentRoom}`;
+  document.title = `RAFT Board · #${currentRoom}`;
+  location.hash = currentRoom === 'default' ? '' : currentRoom;
+}
+
+// Switch to a different room (mid-connection, no WS reconnect needed)
+function switchRoom(roomId) {
+  if (!roomId || roomId === currentRoom) return;
+  const clean = roomId.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 32) || 'default';
+  if (clean === currentRoom) return;
+
+  // Update currentRoom IMMEDIATELY so:
+  // (a) the badge shows the new room right away
+  // (b) incoming stroke/undo/redo for the new room aren't filtered out
+  // (c) outgoing stroke messages carry the correct room
+  currentRoom = clean;
+  updateRoomBadge();
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    // Clear canvas immediately for responsive UX
+    strokes = [];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    addEvent(`Switching to room "${clean}"...`, 'commit');
+    ws.send(JSON.stringify({ type: 'join-room', room: clean }));
+  } else {
+    // If WS is down, reconnect with the new room
+    connectWS();
+  }
+  window.closeRoomModal();
+}
+
+// Create a new room and immediately switch to it
+async function createAndSwitchRoom(roomId) {
+  const clean = (roomId || '').toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 32);
+  if (!clean) return;
+  try {
+    await fetch('/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId: clean })
+    });
+    switchRoom(clean);
+  } catch (e) {
+    addEvent(`Failed to create room: ${e.message}`, 'failover');
+  }
+}
+
+// ─── ROOM MODAL ────────────────────────────────────────────────
+
+// Expose to window so onclick= attributes in HTML can reach these functions
+window.openRoomModal = function() {
+  document.getElementById('room-modal').classList.add('active');
+  refreshRoomList();
+  setTimeout(() => document.getElementById('room-input').focus(), 50);
+};
+
+window.closeRoomModal = function() {
+  document.getElementById('room-modal').classList.remove('active');
+};
+
+window.handleRoomCreate = function() {
+  var input = document.getElementById('room-input');
+  var val = (input ? input.value : '').trim();
+  if (val) {
+    createAndSwitchRoom(val);
+    if (input) input.value = '';
+  }
+};
+
+async function refreshRoomList() {
+  try {
+    const r    = await fetch('/api/rooms');
+    const data = await r.json();
+    const list = document.getElementById('room-list');
+    list.innerHTML = '';
+    (data.rooms || []).forEach(room => {
+      const isActive = room.id === currentRoom;
+      const div = document.createElement('div');
+      div.className = `room-item${isActive ? ' active' : ''}`;
+      div.innerHTML = `
+        <span class="room-item-name"># ${room.id}</span>
+        <span class="room-item-clients">${room.clients} online</span>
+      `;
+      if (!isActive) {
+        div.onclick = () => switchRoom(room.id);
+      }
+      list.appendChild(div);
+    });
+  } catch (_) {}
+}
+
+// Wire room input + button after DOM is fully ready
+document.addEventListener('DOMContentLoaded', function() {
+  var input = document.getElementById('room-input');
+  var btn   = document.getElementById('room-create-btn');
+  var modal = document.getElementById('room-modal');
+
+  function doCreate() {
+    var val = (input ? input.value : '').trim();
+    if (val) {
+      createAndSwitchRoom(val);
+      if (input) input.value = '';
+    }
+  }
+
+  if (input) {
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') doCreate();
+    });
+  }
+
+  if (btn) {
+    btn.addEventListener('click', doCreate);
+  }
+
+  if (modal) {
+    modal.addEventListener('click', function(e) {
+      if (e.target === modal) window.closeRoomModal();
+    });
+  }
+});
 
 // ─── PARTITION CONTROLS ────────────────────────────────────────
 const REPLICA_NAMES = ['replica1', 'replica2', 'replica3', 'replica4'];
@@ -264,10 +459,39 @@ async function pollStatus() {
     const r    = await fetch('/api/cluster-status');
     const data = await r.json();
 
-    // ── cluster summary bar ────────────────────────────────────
     const leaderShort = data.leaderShort
       ?? (data.leader ? data.leader.replace('http://','').split(':')[0] : null);
 
+    // Update dashboard bar
+    const barLeader   = document.getElementById('bar-leader');
+    const barTerm     = document.getElementById('bar-term');
+    const barClients  = document.getElementById('bar-clients');
+    const barReplicas = document.getElementById('bar-replicas');
+    if (barLeader)   barLeader.textContent   = leaderShort ?? '—';
+    if (barTerm)     barTerm.textContent     = data.term   ?? '—';
+    if (barClients)  barClients.textContent  = data.clients ?? '?';
+    if (barReplicas) barReplicas.textContent = `${data.registeredReplicas?.length ?? '?'} nodes`;
+
+    const partWrap = document.getElementById('bar-partition-wrap');
+    const partVal  = document.getElementById('bar-partition');
+    if (data.partitioned?.length) {
+      if (partWrap) partWrap.style.display = '';
+      if (partVal)  partVal.textContent = `⚠ Partitioned: ${data.partitioned.join('  |  ')}`;
+    } else {
+      if (partWrap) partWrap.style.display = 'none';
+    }
+
+    // ── room status in diag panel ──────────────────────────────
+    const roomsEl = document.getElementById('rooms-summary');
+    if (roomsEl && data.rooms) {
+      roomsEl.innerHTML = data.rooms.map(rm =>
+        `<span class="room-stat${rm.id === currentRoom ? ' room-stat-active' : ''}">
+          #${rm.id} <strong>${rm.clients}</strong>
+        </span>`
+      ).join('');
+    }
+
+    // ── diag panel ─────────────────────────────────────────────
     document.getElementById('gw-stats').innerHTML =
       `Leader: <strong style="color:#38BDF8">${leaderShort ?? 'None'}</strong>` +
       ` &nbsp;|&nbsp; Term: <strong style="color:#a78bfa">${data.term ?? '—'}</strong>` +
@@ -284,7 +508,7 @@ async function pollStatus() {
       lastLeader = data.leader;
     }
 
-    // ── term bump event (election happened) ───────────────────
+    // ── term bump event ───────────────────────────────────────
     if (data.term != null && data.term !== lastTermSeen) {
       if (lastTermSeen !== null) {
         addEvent(`🗳 Election — term bumped to ${data.term}`, 'election');
@@ -323,6 +547,7 @@ async function pollStatus() {
           ${r.quorum   ? `<br>Quorum: <strong>${r.quorum}</strong>` : ''}
           ${r.leaderId ? `<br>Follows: <strong>${r.leaderId}</strong>` : ''}
           ${isBlocked  ? `<br><span style="color:#f87171">Blocking: ${r.blocked.join(', ')}</span>` : ''}
+          ${r.rooms?.length ? `<br><span style="color:#a78bfa;font-size:0.75rem">Rooms: ${r.rooms.map(rm => `#${rm.id}(${rm.logLength})`).join(' ')}</span>` : ''}
         </div>
         <div class="log-track" title="Log fill relative to busiest replica">
           <div class="log-fill" style="width:${pct}%"></div>
@@ -336,7 +561,6 @@ async function pollStatus() {
 
       list.appendChild(card);
 
-      // election in progress
       if (r.state === 'candidate') {
         addEvent(`${shortId} started election (term ${r.term})`, 'election');
       }
@@ -347,3 +571,13 @@ async function pollStatus() {
 
 setInterval(pollStatus, 1500);
 pollStatus();
+
+// Refresh room list periodically when modal is open
+setInterval(() => {
+  if (document.getElementById('room-modal')?.classList.contains('active')) {
+    refreshRoomList();
+  }
+}, 3000);
+
+// Initialize room badge on load
+updateRoomBadge();

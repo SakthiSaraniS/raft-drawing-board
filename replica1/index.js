@@ -1,55 +1,103 @@
 const express = require('express');
 const fs      = require('fs');
-const LOG_PATH = '/data/raft-log.json';
-
-// ─── PERSISTENCE ───────────────────────────────────────────────
-function loadLog() {
-  try {
-    if (fs.existsSync(LOG_PATH)) {
-      const saved = JSON.parse(fs.readFileSync(LOG_PATH, 'utf8'));
-      const all = saved.log || [];
-      // Only restore committed entries — uncommitted ones may be from a diverged term
-      log = all.filter(e => e.committed);
-      commitIndex = log.length - 1;
-      currentTerm = saved.currentTerm || 0;
-      console.log(`[${REPLICA_ID}] 📂 Restored ${log.length} committed entries (discarded ${all.length - log.length} uncommitted)`);
-    }
-  } catch (e) {
-    console.error(`[${REPLICA_ID}] ⚠️  Could not restore log:`, e.message);
-  }
-}
-
-function persistLog() {
-  try {
-    fs.mkdirSync('/data', { recursive: true });
-    fs.writeFileSync(LOG_PATH, JSON.stringify({ log, commitIndex, currentTerm }));
-  } catch (e) {
-    console.error(`[${REPLICA_ID}] ⚠️  Could not persist log:`, e.message);
-  }
-}
-
 const axios   = require('axios');
 const crypto  = require('crypto');
 const app     = express();
 app.use(express.json());
+
+// Suppress MaxListenersExceededWarning from axios keep-alive sockets
+require('events').EventEmitter.defaultMaxListeners = 30;
 
 const REPLICA_ID = process.env.REPLICA_ID;
 const PORT       = parseInt(process.env.PORT);
 const PEERS      = process.env.PEERS.split(',');
 const QUORUM     = parseInt(process.env.QUORUM_SIZE) || Math.floor(PEERS.length / 2) + 1;
 
+// ─── MULTI-ROOM LOG STORAGE ────────────────────────────────────
+// Each room has its own independent log. This lets the gateway shard
+// drawing operations by room — conceptually identical to Kafka topics
+// or database table partitioning.
+//
+// roomLogs: Map<roomId, LogEntry[]>
+// roomCommitIndex: Map<roomId, number>
+//
+// The RAFT consensus state (term, voted-for, leader election) is still
+// cluster-wide — rooms share a single consensus layer. What changes is
+// the *data* layer: each room is an independent ordered log of strokes.
+
+const DEFAULT_ROOM = 'default';
+const roomLogs        = new Map([[DEFAULT_ROOM, []]]);
+const roomCommitIndex = new Map([[DEFAULT_ROOM, -1]]);
+
+function getLog(roomId = DEFAULT_ROOM) {
+  if (!roomLogs.has(roomId)) {
+    roomLogs.set(roomId, []);
+    roomCommitIndex.set(roomId, -1);
+  }
+  return roomLogs.get(roomId);
+}
+
+function getCommitIndex(roomId = DEFAULT_ROOM) {
+  return roomCommitIndex.get(roomId) ?? -1;
+}
+
+function setCommitIndex(roomId, idx) {
+  roomCommitIndex.set(roomId, idx);
+}
+
+// ─── PERSISTENCE (per-room) ─────────────────────────────────────
+const DATA_DIR = '/data';
+
+function logPath(roomId) {
+  // Sanitize room ID for use as a filename
+  const safe = roomId.replace(/[^a-z0-9-]/g, '_');
+  return `${DATA_DIR}/raft-log-${safe}.json`;
+}
+
+function loadAllLogs() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) return;
+    const files = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('raft-log-') && f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const roomId = file.replace('raft-log-', '').replace('.json', '').replace(/_/g, '-');
+        const saved  = JSON.parse(fs.readFileSync(`${DATA_DIR}/${file}`, 'utf8'));
+        const all    = saved.log || [];
+        const committed = all.filter(e => e.committed);
+        roomLogs.set(roomId, committed);
+        roomCommitIndex.set(roomId, committed.length - 1);
+        if (saved.currentTerm) currentTerm = Math.max(currentTerm, saved.currentTerm);
+        console.log(`[${REPLICA_ID}] 📂 Restored room "${roomId}": ${committed.length} entries`);
+      } catch (e) {
+        console.error(`[${REPLICA_ID}] ⚠️  Could not restore ${file}:`, e.message);
+      }
+    }
+  } catch (e) {
+    console.error(`[${REPLICA_ID}] ⚠️  Could not scan data dir:`, e.message);
+  }
+}
+
+function persistLog(roomId) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const log = getLog(roomId);
+    fs.writeFileSync(logPath(roomId), JSON.stringify({
+      log,
+      commitIndex: getCommitIndex(roomId),
+      currentTerm
+    }));
+  } catch (e) {
+    console.error(`[${REPLICA_ID}] ⚠️  Could not persist log for room "${roomId}":`, e.message);
+  }
+}
+
 // ─── RAFT STATE ────────────────────────────────────────────────
 let state       = 'follower';
 let currentTerm = 0;
 let votedFor    = null;
-let log         = [];
-let commitIndex = -1;
 let leaderId    = null;
 let electionTimer = null;
-const blocked   = new Set(); // peer URLs this replica won't talk to
-
-// NOTE: No in-memory undoStack/redoStack — both are derived from the
-// replicated log on demand, so undo/redo survives leader failover.
+const blocked   = new Set();
 
 // ─── ELECTION TIMER ────────────────────────────────────────────
 function resetElectionTimer() {
@@ -75,7 +123,6 @@ async function startElection() {
   );
 
   results.forEach(r => { if (r.data.voteGranted) votes++; });
-  console.log(`[${REPLICA_ID}] Votes received: ${votes} (quorum: ${QUORUM})`);
 
   if (votes >= QUORUM && state === 'candidate') {
     becomeLeader();
@@ -103,21 +150,19 @@ function sendHeartbeats() {
   setTimeout(sendHeartbeats, 150);
 }
 
-// ─── REPLICATION HELPER ────────────────────────────────────────
-// Appends entry to local log, replicates to peers, commits if quorum reached.
-// Returns { committed, index } — used by /stroke, /undo, /redo.
-async function replicateEntry(entry) {
+// ─── REPLICATION HELPER (room-aware) ──────────────────────────
+async function replicateEntry(entry, roomId = DEFAULT_ROOM) {
+  const log   = getLog(roomId);
   const index = log.length;
   log.push({ term: currentTerm, entry, committed: false });
 
   let acks = 1;
   await Promise.all(
-    // Bug fix: filter blocked peers so partitioned replicas don't eat
-    // 400ms timeouts on every write — same filter used in heartbeats/votes
     PEERS.filter(p => !blocked.has(p)).map(peer =>
       axios.post(`${peer}/append-entries`, {
         term: currentTerm, leaderId: REPLICA_ID,
-        entry, prevLogIndex: index - 1
+        entry, prevLogIndex: index - 1,
+        room: roomId,                          // ← pass room to followers
       }, { timeout: 400 })
       .then(r => { if (r.data.success) acks++; })
       .catch(() => {})
@@ -126,50 +171,41 @@ async function replicateEntry(entry) {
 
   if (acks >= QUORUM) {
     log[index].committed = true;
-    commitIndex = index;
-    persistLog();
-    console.log(`[${REPLICA_ID}] ✅ Committed entry #${index} type=${entry.type || 'stroke'} (acks: ${acks})`);
-    // Commit broadcast goes to ALL peers (fire-and-forget, ok if some miss it)
+    setCommitIndex(roomId, index);
+    persistLog(roomId);
+    console.log(`[${REPLICA_ID}] ✅ Committed entry #${index} room="${roomId}" type=${entry.type || 'stroke'} (acks: ${acks})`);
     PEERS.forEach(peer =>
-      axios.post(`${peer}/commit`, { index }, { timeout: 300 }).catch(() => {})
+      axios.post(`${peer}/commit`, { index, room: roomId }, { timeout: 300 }).catch(() => {})
     );
     return { committed: true, index };
   } else {
     log[index].committed = false;
-    console.log(`[${REPLICA_ID}] ❌ Entry failed — not enough acks (${acks}/${QUORUM})`);
     return { committed: false };
   }
 }
 
-// ─── LOG-DERIVED UNDO/REDO STATE ───────────────────────────────
-// Scans the committed log to reconstruct what is currently undoable
-// and redoable. Because this reads from the replicated log (not
-// in-memory stacks), it works correctly after a leader failover.
-function getUndoRedoState() {
+// ─── LOG-DERIVED UNDO/REDO STATE (room-aware) ──────────────────
+function getUndoRedoState(roomId = DEFAULT_ROOM) {
+  const log = getLog(roomId);
   const cancelledIds = new Set();
-  const recentlyCancelled = []; // ordered list of { id, stroke } for redo
+  const recentlyCancelled = [];
 
   for (const entry of log) {
     if (!entry.committed) continue;
-
     if (entry.entry?.type === 'cancel') {
       const targetId = entry.entry.targetId;
       cancelledIds.add(targetId);
-      // Find the original stroke so redo can re-apply it
       const original = log.find(
         e => e.committed && e.entry?.id === targetId && e.entry?.type !== 'cancel'
       );
       if (original) recentlyCancelled.push({ id: targetId, stroke: original.entry });
-
     } else if (entry.entry?.id) {
-      // A new stroke (including a redo) clears it from the cancelled list
       const idx = recentlyCancelled.findIndex(r => r.id === entry.entry.id);
       if (idx !== -1) recentlyCancelled.splice(idx, 1);
       cancelledIds.delete(entry.entry.id);
     }
   }
 
-  // Last active stroke = what undo will cancel next
   const activeStrokes = log.filter(
     e => e.committed && e.entry?.type !== 'cancel' && !cancelledIds.has(e.entry?.id)
   );
@@ -177,7 +213,6 @@ function getUndoRedoState() {
     ? activeStrokes[activeStrokes.length - 1]
     : null;
 
-  // Last entry in recentlyCancelled = what redo will restore next
   return { lastActive, redoStack: recentlyCancelled, cancelledIds };
 }
 
@@ -191,7 +226,6 @@ app.post('/request-vote', (req, res) => {
   const grant = term >= currentTerm &&
     (votedFor === null || votedFor === candidateId);
   if (grant) { votedFor = candidateId; resetElectionTimer(); }
-  console.log(`[${REPLICA_ID}] Vote request from ${candidateId} term ${term}: ${grant ? 'GRANTED' : 'DENIED'}`);
   res.json({ voteGranted: grant, term: currentTerm });
 });
 
@@ -199,100 +233,82 @@ app.post('/heartbeat', (req, res) => {
   const { term, leaderId: lid } = req.body;
   if (term >= currentTerm) {
     currentTerm = term;
-    if (state !== 'follower') console.log(`[${REPLICA_ID}] Reverting to follower (term ${term})`);
-    state    = 'follower';
-    leaderId = lid;
+    state       = 'follower';
+    leaderId    = lid;
     resetElectionTimer();
   }
-  res.json({ success: true });
+  res.json({ ok: true });
 });
 
+// ── append-entries: room-aware ──────────────────────────────────
 app.post('/append-entries', (req, res) => {
-  const { term, leaderId: lid, entry, prevLogIndex } = req.body;
-  if (term < currentTerm) return res.json({ success: false, reason: 'stale term' });
-  currentTerm = term; state = 'follower'; leaderId = lid;
-  resetElectionTimer();
-
-  if (prevLogIndex !== undefined && prevLogIndex > log.length - 1) {
-    return res.json({ success: false, logLength: log.length });
+  const { term, leaderId: lid, entry, room = DEFAULT_ROOM } = req.body;
+  if (term >= currentTerm) {
+    currentTerm = term;
+    state       = 'follower';
+    leaderId    = lid;
+    resetElectionTimer();
   }
-  if (entry) {
-    log.push({ term, entry, committed: false });
-    console.log(`[${REPLICA_ID}] Appended entry #${log.length - 1} type=${entry.type || 'stroke'}`);
-  }
+  const log = getLog(room);
+  log.push({ term, entry, committed: false });
   res.json({ success: true });
 });
 
+// ── commit: room-aware ──────────────────────────────────────────
 app.post('/commit', (req, res) => {
-  const { index } = req.body;
+  const { index, room = DEFAULT_ROOM } = req.body;
+  const log = getLog(room);
   if (log[index]) {
     log[index].committed = true;
-    commitIndex = index;
-    persistLog();
-    console.log(`[${REPLICA_ID}] ✅ Committed entry #${index}`);
+    setCommitIndex(room, index);
+    persistLog(room);
   }
-  res.json({ success: true });
+  res.json({ ok: true });
 });
 
-app.get('/sync-log', (req, res) => {
-  const from = parseInt(req.query.fromIndex) || 0;
-  const missing = log.slice(from).filter(e => e.committed);
-  console.log(`[${REPLICA_ID}] Sync-log from index ${from}: sending ${missing.length} entries`);
-  res.json({ entries: missing });
-});
-
-// Emergency log reset — called by gateway after chaos heal when logs have diverged
-app.post('/reset-log', (req, res) => {
-  const { entries = [], term = currentTerm } = req.body;
-  log = entries.map(e => ({ term: e.term || term, entry: e.entry || e, committed: true }));
-  commitIndex = log.length - 1;
-  currentTerm = term;
-  state = 'follower';
-  votedFor = null;
-  persistLog();
-  resetElectionTimer();
-  console.log(`[${REPLICA_ID}] 🔄 Log reset to ${log.length} entries`);
-  res.json({ ok: true, logLength: log.length });
-});
-
+// ─── STATUS ────────────────────────────────────────────────────
 app.get('/status', (req, res) => {
-  // Re-use getUndoRedoState so active stroke count is consistent
-  const { cancelledIds } = getUndoRedoState();
-  const activeStrokes = log.filter(
-    e => e.committed && e.entry?.type !== 'cancel' && !cancelledIds.has(e.entry?.id)
-  ).length;
+  // Total log entries across all rooms (for the diagnostics panel)
+  let totalLogLength = 0;
+  let totalActiveStrokes = 0;
+  roomLogs.forEach((log, roomId) => {
+    totalLogLength += log.length;
+    const { cancelledIds } = getUndoRedoState(roomId);
+    totalActiveStrokes += log.filter(
+      e => e.committed && e.entry?.type !== 'cancel' && !cancelledIds.has(e.entry?.id)
+    ).length;
+  });
 
   res.json({
     id: REPLICA_ID, state, term: currentTerm,
-    leaderId, logLength: log.length, commitIndex,
-    activeStrokes, quorum: QUORUM,
-    blocked: [...blocked]
+    leaderId, logLength: totalLogLength, commitIndex: Math.max(...[...roomCommitIndex.values()], -1),
+    activeStrokes: totalActiveStrokes, quorum: QUORUM,
+    blocked: [...blocked],
+    rooms: [...roomLogs.keys()].map(id => ({
+      id,
+      logLength: getLog(id).length,
+      commitIndex: getCommitIndex(id),
+    })),
   });
 });
 
 // ─── PARTITION CONTROL ─────────────────────────────────────────
 app.post('/set-block', (req, res) => {
-  const { peers } = req.body; // array of full URLs e.g. ["http://replica2:4002"]
+  const { peers } = req.body;
   blocked.clear();
   peers.forEach(p => blocked.add(p));
-  console.log(`[${REPLICA_ID}] 🚧 Blocking peers: ${peers.join(', ') || 'none'}`);
   res.json({ ok: true, blocked: [...blocked] });
 });
 
-// ─── STROKE HANDLER (leader only) ──────────────────────────────
+// ─── STROKE HANDLER (room-aware, leader only) ──────────────────
 app.post('/stroke', async (req, res) => {
   if (state !== 'leader') {
     return res.status(302).json({ redirect: leaderId });
   }
-  const { stroke } = req.body;
-
-  // Assign stable ID — needed so undo/redo can reference this stroke by ID
+  const { stroke, room = DEFAULT_ROOM } = req.body;
   stroke.id = stroke.id || crypto.randomUUID();
 
-  // No need to manually clear a redo stack — getUndoRedoState() derives
-  // redo eligibility from the log, so new strokes automatically collapse it
-
-  const result = await replicateEntry(stroke);
+  const result = await replicateEntry(stroke, room);
   if (result.committed) {
     res.json({ success: true, committed: true, stroke });
   } else {
@@ -300,56 +316,70 @@ app.post('/stroke', async (req, res) => {
   }
 });
 
-// ─── UNDO HANDLER (leader only) ────────────────────────────────
-// Appends a 'cancel' compensation entry — never truncates the log.
-// This preserves Raft's append-only guarantee.
+// ─── UNDO HANDLER (room-aware, leader only) ────────────────────
 app.post('/undo', async (req, res) => {
   if (state !== 'leader') {
     return res.status(302).json({ redirect: leaderId });
   }
-
-  // Derive from log — works even after a leader failover
-  const { lastActive } = getUndoRedoState();
+  const { room = DEFAULT_ROOM } = req.body;
+  const { lastActive } = getUndoRedoState(room);
   if (!lastActive) {
     return res.json({ committed: false, reason: 'Nothing to undo' });
   }
 
   const targetId = lastActive.entry.id;
-  const result = await replicateEntry({ type: 'cancel', targetId });
-
+  const result = await replicateEntry({ type: 'cancel', targetId }, room);
   if (result.committed) {
-    console.log(`[${REPLICA_ID}] ↩  Undo committed — cancelled stroke ${targetId}`);
     res.json({ committed: true, targetId });
   } else {
     res.json({ committed: false, reason: 'No majority for undo' });
   }
 });
 
-// ─── REDO HANDLER (leader only) ────────────────────────────────
-// Re-appends the stroke with its original ID so the frontend can reconcile.
+// ─── REDO HANDLER (room-aware, leader only) ────────────────────
 app.post('/redo', async (req, res) => {
   if (state !== 'leader') {
     return res.status(302).json({ redirect: leaderId });
   }
-
-  // Derive from log — works even after a leader failover
-  const { redoStack } = getUndoRedoState();
-  const last = redoStack[redoStack.length - 1]; // most recently cancelled
+  const { room = DEFAULT_ROOM } = req.body;
+  const { redoStack } = getUndoRedoState(room);
+  const last = redoStack[redoStack.length - 1];
   if (!last) {
     return res.json({ committed: false, reason: 'Nothing to redo' });
   }
 
-  const result = await replicateEntry(last.stroke);
+  const result = await replicateEntry(last.stroke, room);
   if (result.committed) {
-    console.log(`[${REPLICA_ID}] ↪  Redo committed — restored stroke ${last.id}`);
     res.json({ committed: true, stroke: last.stroke });
   } else {
     res.json({ committed: false, reason: 'No majority for redo' });
   }
 });
 
+// ─── SYNC LOG (room-aware) ─────────────────────────────────────
+app.get('/sync-log', (req, res) => {
+  const fromIndex = parseInt(req.query.fromIndex) || 0;
+  const roomId    = req.query.room || DEFAULT_ROOM;
+  const log       = getLog(roomId);
+  const entries   = log
+    .slice(fromIndex)
+    .filter(e => e.committed);
+  res.json({ entries, room: roomId });
+});
+
+// ─── RESET LOG (room-aware) ────────────────────────────────────
+app.post('/reset-log', (req, res) => {
+  const { entries = [], term, room = DEFAULT_ROOM } = req.body;
+  roomLogs.set(room, entries);
+  roomCommitIndex.set(room, entries.length - 1);
+  if (term) currentTerm = Math.max(currentTerm, term);
+  persistLog(room);
+  console.log(`[${REPLICA_ID}] 🔄 Log reset for room "${room}": ${entries.length} entries`);
+  res.json({ ok: true, room, entries: entries.length });
+});
+
 app.listen(PORT, () => {
   console.log(`[${REPLICA_ID}] 🚀 Listening on port ${PORT} | peers: ${PEERS.length} | quorum: ${QUORUM}`);
-  loadLog();
+  loadAllLogs();
   resetElectionTimer();
 });
