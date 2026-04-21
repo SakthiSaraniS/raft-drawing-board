@@ -60,6 +60,7 @@
     #main { display: flex; flex: 1; overflow: hidden; }
     #canvas-wrap { flex: 1; position: relative; }
     canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+    #cursor-overlay { position: absolute; top: 0; left: 0; pointer-events: none; }
 
     /* ── DIAGNOSTICS PANEL ── */
     #diag-panel { width: 0; background: #1E293B; border-left: 2px solid #0EA5E9;
@@ -486,6 +487,9 @@
   <div id="ws-status">
     <div class="status-dot offline" id="ws-dot"></div>
     <span id="ws-label">Connecting...</span>
+    <span id="presence-self-wrap" style="margin-left:10px;font-size:0.78rem;opacity:0.8;">
+      🖱 <span id="presence-self" style="font-weight:600;">—</span>
+    </span>
   </div>
 </header>
 
@@ -501,6 +505,10 @@
   <div class="dash-divider"></div>
   <div class="dash-stat">
     Clients <span class="dash-val" id="bar-clients">—</span>
+  </div>
+  <div class="dash-divider"></div>
+  <div class="dash-stat" id="bar-presence-wrap" title="Live cursors visible in your room (ephemeral — outside Raft)">
+    🖱 Cursors <span class="dash-val" id="bar-presence">0</span>
   </div>
   <div class="dash-divider"></div>
   <div class="dash-stat">
@@ -535,6 +543,9 @@
 <div id="main">
   <div id="canvas-wrap">
     <canvas id="board"></canvas>
+    <!-- Cursor overlay: receives no pointer events — drawing canvas handles them.
+         Sits on top via z-index so cursors render above strokes. -->
+    <canvas id="cursor-overlay" style="position:absolute;top:0;left:0;pointer-events:none;z-index:10;"></canvas>
   </div>
 
   <!-- ── DIAGNOSTICS PANEL ── -->

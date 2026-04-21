@@ -17,11 +17,45 @@ let brushSz  = 4;
 let path     = [];
 let strokes  = []; // all committed strokes for current room
 
+// ─── CURSOR PRESENCE (ephemeral, gossip channel) ────────────────
+// remoteCursors: Map<clientId, { name, color, x, y, lastSeen }>
+// These are NOT stored in the Raft log — they live only in-memory.
+const remoteCursors = new Map();
+let myClientId  = null; // assigned by the server on connect
+let myPresenceColor = '#38BDF8';
+let myPresenceName  = 'Me';
+
+// Cursor overlay canvas sits on top of the drawing canvas
+const cursorCanvas = document.getElementById('cursor-overlay');
+const cursorCtx    = cursorCanvas ? cursorCanvas.getContext('2d') : null;
+
+// Throttle cursor sends: one update per ~30ms (~33 fps)
+let lastCursorSend = 0;
+const CURSOR_THROTTLE_MS = 30;
+
+// Stale cursor cleanup: remove cursors we haven't heard from in 5s
+setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+  remoteCursors.forEach((cur, id) => {
+    if (now - cur.lastSeen > 5000) {
+      remoteCursors.delete(id);
+      changed = true;
+    }
+  });
+  if (changed) drawCursors();
+}, 1000);
+
 function resize() {
   const wrap = document.getElementById('canvas-wrap');
   canvas.width  = wrap.clientWidth;
   canvas.height = wrap.clientHeight;
+  if (cursorCanvas) {
+    cursorCanvas.width  = wrap.clientWidth;
+    cursorCanvas.height = wrap.clientHeight;
+  }
   redraw();
+  drawCursors();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -36,16 +70,99 @@ document.getElementById('brushSize').addEventListener('input', e => {
   brushSz = parseInt(e.target.value);
 });
 
+// ─── CURSOR RENDERING ──────────────────────────────────────────
+function drawCursors() {
+  if (!cursorCtx || !cursorCanvas) return;
+  cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+
+  remoteCursors.forEach(cur => {
+    const px = cur.x * cursorCanvas.width;
+    const py = cur.y * cursorCanvas.height;
+
+    // Arrow pointer
+    cursorCtx.save();
+    cursorCtx.translate(px, py);
+
+    // Shadow for contrast
+    cursorCtx.shadowColor = 'rgba(0,0,0,0.4)';
+    cursorCtx.shadowBlur  = 4;
+
+    // Draw arrow
+    cursorCtx.beginPath();
+    cursorCtx.moveTo(0, 0);
+    cursorCtx.lineTo(0, 16);
+    cursorCtx.lineTo(4, 12);
+    cursorCtx.lineTo(8, 20);
+    cursorCtx.lineTo(10, 19);
+    cursorCtx.lineTo(6, 11);
+    cursorCtx.lineTo(11, 11);
+    cursorCtx.closePath();
+    cursorCtx.fillStyle   = cur.color;
+    cursorCtx.strokeStyle = '#fff';
+    cursorCtx.lineWidth   = 1.5;
+    cursorCtx.fill();
+    cursorCtx.stroke();
+    cursorCtx.shadowBlur  = 0;
+
+    // Name label
+    const label = cur.name;
+    const pad   = 5;
+    cursorCtx.font         = 'bold 11px system-ui, sans-serif';
+    const tw = cursorCtx.measureText(label).width;
+    const lx = 13;
+    const ly = 3;
+    const lw = tw + pad * 2;
+    const lh = 18;
+    const r  = 4;
+
+    // Pill background
+    cursorCtx.beginPath();
+    cursorCtx.moveTo(lx + r, ly);
+    cursorCtx.lineTo(lx + lw - r, ly);
+    cursorCtx.quadraticCurveTo(lx + lw, ly, lx + lw, ly + r);
+    cursorCtx.lineTo(lx + lw, ly + lh - r);
+    cursorCtx.quadraticCurveTo(lx + lw, ly + lh, lx + lw - r, ly + lh);
+    cursorCtx.lineTo(lx + r, ly + lh);
+    cursorCtx.quadraticCurveTo(lx, ly + lh, lx, ly + lh - r);
+    cursorCtx.lineTo(lx, ly + r);
+    cursorCtx.quadraticCurveTo(lx, ly, lx + r, ly);
+    cursorCtx.closePath();
+    cursorCtx.fillStyle = cur.color;
+    cursorCtx.fill();
+
+    // Label text
+    cursorCtx.fillStyle    = '#fff';
+    cursorCtx.textBaseline = 'middle';
+    cursorCtx.fillText(label, lx + pad, ly + lh / 2);
+
+    cursorCtx.restore();
+  });
+}
+
+// ─── CURSOR SEND (throttled, gossip — bypasses Raft) ───────────
+function sendCursorPosition(x, y) {
+  const now = Date.now();
+  if (now - lastCursorSend < CURSOR_THROTTLE_MS) return;
+  lastCursorSend = now;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'cursor', x, y }));
+  }
+}
+
 canvas.addEventListener('pointerdown', e => {
   drawing = true; path = [];
   canvas.setPointerCapture(e.pointerId);
 });
 
 canvas.addEventListener('pointermove', e => {
-  if (!drawing) return;
   const rect = canvas.getBoundingClientRect();
   const x = (e.clientX - rect.left) / rect.width;
   const y = (e.clientY - rect.top)  / rect.height;
+
+  // Always broadcast cursor position (even when not drawing)
+  sendCursorPosition(x, y);
+
+  if (!drawing) return;
   path.push({ x, y });
   if (path.length >= 2) {
     drawSegment(path[path.length-2], path[path.length-1], color, brushSz);
@@ -141,6 +258,9 @@ function connectWS() {
     dot.classList.add('offline');
     label.textContent = 'Reconnecting...';
     addEvent('WebSocket lost — retrying', 'failover');
+    // Wipe remote cursors — they'll be re-established on reconnect
+    remoteCursors.clear();
+    drawCursors();
     setTimeout(connectWS, 1500);
   };
 
@@ -161,6 +281,70 @@ function connectWS() {
       if (roomScopedTypes.includes(msg.type) &&
           msg.room && msg.room !== currentRoom) {
         return;
+      }
+
+      // ── self-identity (server tells us our clientId/color/name) ─
+      if (msg.type === 'self-identity') {
+        myClientId       = msg.clientId;
+        myPresenceColor  = msg.color;
+        myPresenceName   = msg.name;
+        // Show our own identity in the status bar
+        const selfEl = document.getElementById('presence-self');
+        if (selfEl) {
+          selfEl.textContent = msg.name;
+          selfEl.style.color = msg.color;
+        }
+      }
+
+      // ── presence-snapshot (all cursors already in room) ──────
+      if (msg.type === 'presence-snapshot') {
+        (msg.cursors || []).forEach(c => {
+          if (!remoteCursors.has(c.clientId)) {
+            remoteCursors.set(c.clientId, {
+              name: c.name, color: c.color,
+              x: -1, y: -1, lastSeen: Date.now()
+            });
+          }
+        });
+        drawCursors();
+      }
+
+      // ── cursor-join (a new peer appeared in our room) ────────
+      if (msg.type === 'cursor-join') {
+        remoteCursors.set(msg.clientId, {
+          name: msg.name, color: msg.color,
+          x: -1, y: -1, lastSeen: Date.now()
+        });
+        addEvent(`🖱 ${msg.name} joined the room`, 'commit');
+        drawCursors();
+      }
+
+      // ── cursor (live position update — presence gossip) ──────
+      if (msg.type === 'cursor') {
+        const existing = remoteCursors.get(msg.clientId);
+        if (existing) {
+          existing.x        = msg.x;
+          existing.y        = msg.y;
+          existing.lastSeen = Date.now();
+        } else {
+          // Saw a cursor before its join message — create entry
+          remoteCursors.set(msg.clientId, {
+            name: msg.name || msg.clientId,
+            color: msg.color || '#fff',
+            x: msg.x, y: msg.y, lastSeen: Date.now()
+          });
+        }
+        drawCursors();
+      }
+
+      // ── cursor-leave (peer disconnected or switched room) ────
+      if (msg.type === 'cursor-leave') {
+        const cur = remoteCursors.get(msg.clientId);
+        if (cur) {
+          addEvent(`🖱 ${cur.name} left the room`, 'failover');
+          remoteCursors.delete(msg.clientId);
+          drawCursors();
+        }
       }
 
       // ── sync (initial canvas state on connect) ─────────────
@@ -274,6 +458,9 @@ function switchRoom(roomId) {
     // Clear canvas immediately for responsive UX
     strokes = [];
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Clear remote cursors — they belong to the old room
+    remoteCursors.clear();
+    drawCursors();
     addEvent(`Switching to room "${clean}"...`, 'commit');
     ws.send(JSON.stringify({ type: 'join-room', room: clean }));
   } else {
@@ -470,6 +657,8 @@ async function pollStatus() {
     if (barLeader)   barLeader.textContent   = leaderShort ?? '—';
     if (barTerm)     barTerm.textContent     = data.term   ?? '—';
     if (barClients)  barClients.textContent  = data.clients ?? '?';
+    const barPresence = document.getElementById('bar-presence');
+    if (barPresence) barPresence.textContent = remoteCursors.size;
     if (barReplicas) barReplicas.textContent = `${data.registeredReplicas?.length ?? '?'} nodes`;
 
     const partWrap = document.getElementById('bar-partition-wrap');

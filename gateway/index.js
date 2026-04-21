@@ -92,6 +92,66 @@ let currentLeader = null;
 // Map: clientWs → roomId (so we know which room each client is in)
 const clientRooms = new Map();
 
+// ─── PRESENCE STATE (ephemeral — never touches Raft) ───────────
+// clientId is assigned on connection; cursors are keyed by clientId.
+// This lives ONLY in the gateway process and is lost on restart — by design.
+// Map: clientWs → { clientId, name, color, room }
+const clientPresence = new Map();
+
+// Stable palette: each new client gets the next color, cycling.
+const CURSOR_COLORS = [
+  '#f87171', // red-400
+  '#fb923c', // orange-400
+  '#facc15', // yellow-400
+  '#4ade80', // green-400
+  '#34d399', // emerald-400
+  '#22d3ee', // cyan-400
+  '#818cf8', // indigo-400
+  '#e879f9', // fuchsia-400
+  '#f472b6', // pink-400
+  '#a78bfa', // violet-400
+];
+let colorCursor = 0;
+let clientSeq   = 0;
+
+function assignPresence(ws) {
+  const clientId = `c${++clientSeq}`;
+  const color    = CURSOR_COLORS[colorCursor++ % CURSOR_COLORS.length];
+  const name     = `User ${clientSeq}`;
+  clientPresence.set(ws, { clientId, name, color });
+  return { clientId, name, color };
+}
+
+// Broadcast presence msg to all OTHER clients in the same room.
+// This is a direct O(n) fan-out — no Raft, no disk, no quorum.
+function broadcastCursor(senderWs, msg) {
+  const room = clientRooms.get(senderWs);
+  if (!room) return;
+  const out = JSON.stringify(msg);
+  clientRooms.forEach((cRoom, ws) => {
+    if (ws === senderWs) return;
+    if (cRoom !== room) return;
+    if (ws.readyState === 1) ws.send(out);
+  });
+}
+
+// Send the full current presence list to a single newly-joined client
+// so it immediately sees all cursors that are already on screen.
+function sendPresenceSnapshot(toWs) {
+  const myRoom = clientRooms.get(toWs);
+  const cursors = [];
+  clientPresence.forEach((info, ws) => {
+    if (ws === toWs) return;
+    const room = clientRooms.get(ws);
+    if (room !== myRoom) return;
+    cursors.push({ clientId: info.clientId, name: info.name, color: info.color });
+  });
+  if (cursors.length === 0) return;
+  if (toWs.readyState === 1) {
+    toWs.send(JSON.stringify({ type: 'presence-snapshot', cursors }));
+  }
+}
+
 // ─── LEADER DISCOVERY ──────────────────────────────────────────
 async function findLeader() {
   for (const url of REPLICAS) {
@@ -169,7 +229,20 @@ wss.on('connection', async (ws, req) => {
   }
 
   clientRooms.set(ws, roomId);
-  console.log(`[Gateway] Client connected → room="${roomId}" (total: ${clientRooms.size})`);
+
+  // ── Assign ephemeral presence identity ──────────────────────
+  const { clientId, name, color } = assignPresence(ws);
+  console.log(`[Gateway] Client connected → room="${roomId}" id=${clientId} (total: ${clientRooms.size})`);
+
+  // Tell this client their own identity so they can label themselves
+  ws.send(JSON.stringify({ type: 'self-identity', clientId, name, color }));
+
+  // Tell everyone else in the room that this client joined (so they can
+  // show a cursor for them even before the first mousemove arrives).
+  broadcastCursor(ws, { type: 'cursor-join', clientId, name, color, room: roomId });
+
+  // Send this new client a snapshot of all cursors already in the room
+  sendPresenceSnapshot(ws);
 
   // ── Sync existing room state to newly connected client ────────
   try {
@@ -197,6 +270,26 @@ wss.on('connection', async (ws, req) => {
       // room and goes stale after a room switch.
       const liveRoom = clientRooms.get(ws) || roomId;
       const msgRoom = normalizeRoom(msg.room) || liveRoom;
+
+      // ── cursor (presence gossip — bypasses Raft entirely) ───
+      // This is the key architectural point: cursor positions are
+      // broadcast directly to peers without touching the consensus log.
+      // Presence data is ephemeral; it doesn't need durability or ordering.
+      if (msg.type === 'cursor') {
+        const presence = clientPresence.get(ws);
+        if (presence) {
+          broadcastCursor(ws, {
+            type: 'cursor',
+            clientId: presence.clientId,
+            name: presence.name,
+            color: presence.color,
+            x: msg.x,
+            y: msg.y,
+            room: clientRooms.get(ws),
+          });
+        }
+        return; // Don't fall through — no Raft involvement
+      }
 
       // ── stroke ──────────────────────────────────────────────
       if (msg.type === 'stroke') {
@@ -270,8 +363,23 @@ wss.on('connection', async (ws, req) => {
         const newRoom = normalizeRoom(msg.room);
         try {
           ensureRoom(newRoom);
+
+          // Notify the OLD room that this cursor is leaving
+          const oldRoom = clientRooms.get(ws);
+          const presence = clientPresence.get(ws);
+          if (presence && oldRoom) {
+            broadcastCursor(ws, { type: 'cursor-leave', clientId: presence.clientId, room: oldRoom });
+          }
+
           clientRooms.set(ws, newRoom);
           console.log(`[Gateway] Client switched to room "${newRoom}"`);
+
+          // Notify the NEW room that this cursor arrived
+          if (presence) {
+            broadcastCursor(ws, { type: 'cursor-join', clientId: presence.clientId, name: presence.name, color: presence.color, room: newRoom });
+          }
+          // Give this client a snapshot of cursors already in the new room
+          sendPresenceSnapshot(ws);
 
           if (!currentLeader) await findLeader();
           let entries = [];
@@ -300,11 +408,17 @@ wss.on('connection', async (ws, req) => {
   });
 
   ws.on('close', () => {
+    // Broadcast departure to room peers before cleanup
+    const presence = clientPresence.get(ws);
+    if (presence) {
+      broadcastCursor(ws, { type: 'cursor-leave', clientId: presence.clientId });
+    }
     clientRooms.delete(ws);
+    clientPresence.delete(ws);
     console.log(`[Gateway] Client disconnected. Total: ${clientRooms.size}`);
   });
 
-  ws.on('error', () => clientRooms.delete(ws));
+  ws.on('error', () => { clientRooms.delete(ws); clientPresence.delete(ws); });
 });
 
 // ─── CHAOS EVENT LOGGING API ───────────────────────────────────
@@ -453,6 +567,7 @@ app.get('/api/cluster-status', async (req, res) => {
     term: currentTerm,
     replicas: statuses,
     clients: clientRooms.size,
+    presenceCount: clientPresence.size,
     rooms: [...roomRegistry].map(id => ({ id, clients: roomCounts[id] || 0 })),
     partitioned: [...partitioned],
     registeredReplicas: REPLICAS.map(shortName),
