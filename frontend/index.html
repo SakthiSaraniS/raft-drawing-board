@@ -138,6 +138,64 @@
                    transition: background 0.2s; }
     #diag-toggle:hover { background: #0284C7; }
 
+    /* ── REPLAY / TIME-TRAVEL PANEL (Feature 3) ── */
+    #replay-panel {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 60;
+      background: linear-gradient(180deg, transparent 0%, rgba(15,23,42,0.97) 12%);
+      padding: 10px 20px 14px; transform: translateY(100%);
+      transition: transform 0.3s ease; pointer-events: none;
+    }
+    #replay-panel.open { transform: translateY(0); pointer-events: all; }
+    #replay-inner {
+      display: flex; flex-direction: column; gap: 8px; max-width: 900px; margin: 0 auto;
+    }
+    #replay-header {
+      display: flex; align-items: center; gap: 10px; font-size: 0.78rem;
+    }
+    #replay-title { color: #38BDF8; font-weight: bold; font-size: 0.85rem; white-space: nowrap; }
+    #replay-step-label {
+      color: #94A3B8; font-size: 0.78rem; min-width: 80px; text-align: right; white-space: nowrap;
+    }
+    #replay-entry-preview {
+      flex: 1; color: #64748B; font-size: 0.72rem; font-family: monospace;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #replay-controls { display: flex; align-items: center; gap: 8px; }
+    .replay-btn {
+      background: #1E293B; border: 1px solid #334155; color: #94A3B8;
+      border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 0.78rem;
+      transition: all 0.15s; white-space: nowrap; flex-shrink: 0;
+    }
+    .replay-btn:hover { border-color: #38BDF8; color: #E2E8F0; }
+    .replay-btn.active { background: #082f49; border-color: #38BDF8; color: #38BDF8; }
+    #replay-scrubber {
+      flex: 1; accent-color: #0EA5E9; cursor: pointer; height: 4px;
+      min-width: 0;
+    }
+    #replay-live-badge {
+      background: #14532D; color: #86EFAC; border-radius: 5px;
+      padding: 2px 8px; font-size: 0.68rem; font-weight: bold;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    #replay-live-badge.paused { background: #7C2D12; color: #FCA5A5; }
+    #replay-toggle-btn {
+      position: fixed; bottom: 70px; right: 20px;
+      background: #7C3AED; color: #fff; border: none; border-radius: 8px;
+      padding: 10px 16px; cursor: pointer; font-size: 0.85rem; font-weight: bold;
+      box-shadow: 0 4px 20px rgba(124,58,237,0.4); z-index: 50;
+      transition: background 0.2s;
+    }
+    #replay-toggle-btn:hover { background: #6D28D9; }
+
+    /* snapshot badge in diag panel */
+    .badge-snapshot { background: #0D4A3A; color: #5EEAD4; }
+    .snapshot-section { background: #0F172A; border-radius: 8px; padding: 12px;
+                        margin-bottom: 14px; border-left: 4px solid #0D9488; }
+    .snapshot-section h3 { font-size: 0.8rem; color: #2DD4BF; margin-bottom: 8px;
+                            font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; }
+    .snapshot-info { font-size: 0.75rem; color: #64748B; line-height: 1.8; }
+    .snapshot-info strong { color: #94A3B8; }
+
     /* ── ROOM BADGE ── */
     #room-badge-btn {
       display: flex; align-items: center; gap: 6px;
@@ -582,6 +640,18 @@
       <!-- Replica cards (populated by app.js) -->
       <div id="replica-list"></div>
 
+      <!-- Snapshot & Compaction (Feature 4) -->
+      <div class="snapshot-section">
+        <h3>📸 Snapshot &amp; Compaction</h3>
+        <div class="snapshot-info" id="snapshot-info">No snapshot yet for this room</div>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-teal" style="font-size:0.72rem;padding:4px 10px"
+                  onclick="takeSnapshot()">📸 Take Snapshot</button>
+          <button class="btn btn-ghost" style="font-size:0.72rem;padding:4px 10px"
+                  onclick="openReplayPanel()">⏱ Open Scrubber</button>
+        </div>
+      </div>
+
       <!-- Event log -->
       <div class="event-log-label">Event Log</div>
       <div class="event-log" id="event-log">
@@ -592,6 +662,28 @@
 </div>
 
 <button id="diag-toggle" onclick="toggleDiag()">⚙ Backend Status</button>
+<button id="replay-toggle-btn" onclick="toggleReplay()">⏱ Time Travel</button>
+
+<!-- ── REPLAY / TIME-TRAVEL PANEL (Feature 3) ───────────────── -->
+<div id="replay-panel">
+  <div id="replay-inner">
+    <div id="replay-header">
+      <span id="replay-title">⏱ Time Travel — Raft Log Scrubber</span>
+      <span id="replay-entry-preview">—</span>
+      <span id="replay-step-label">Step —/—</span>
+      <span id="replay-live-badge">● LIVE</span>
+    </div>
+    <div id="replay-controls">
+      <button class="replay-btn" onclick="replayStep(-10)" title="Back 10">«</button>
+      <button class="replay-btn" onclick="replayStep(-1)" title="Step back">◀</button>
+      <input type="range" id="replay-scrubber" min="0" max="0" value="0">
+      <button class="replay-btn" onclick="replayStep(1)" title="Step forward">▶</button>
+      <button class="replay-btn" onclick="replayStep(10)" title="Forward 10">»</button>
+      <button class="replay-btn active" id="replay-live-btn" onclick="replayGoLive()">↩ Live</button>
+      <button class="replay-btn" onclick="toggleReplay()" title="Close scrubber">✕</button>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 

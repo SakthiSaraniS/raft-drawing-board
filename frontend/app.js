@@ -277,7 +277,7 @@ function connectWS() {
       // (server also filters, but guard here for safety)
       // NOTE: 'room-joined' and 'sync' must NEVER be filtered — they are
       // the messages that establish the new room context itself.
-      const roomScopedTypes = ['stroke', 'undo', 'redo', 'clear'];
+      const roomScopedTypes = ['stroke', 'undo', 'redo', 'clear', 'snapshot'];
       if (roomScopedTypes.includes(msg.type) &&
           msg.room && msg.room !== currentRoom) {
         return;
@@ -389,12 +389,18 @@ function connectWS() {
         redraw();
         addEvent(`Joined room "${currentRoom}" — ${syncedStrokes.length} strokes`, 'commit');
         refreshRoomList();
+        // Feature 3 & 4: reset replay to live and refresh log + snapshot info
+        replayLive = true;
+        replayLog  = [];
+        if (replayOpen) loadReplayLog();
+        document.getElementById('snapshot-info').textContent = 'No snapshot yet for this room';
       }
 
       // ── stroke ─────────────────────────────────────────────
       if (msg.type === 'stroke') {
         strokes.push(msg.data);
         drawFullStroke(msg.data);
+        onLiveLogChange(); // Feature 3: keep scrubber in sync
       }
 
       // ── undo ───────────────────────────────────────────────
@@ -402,6 +408,7 @@ function connectWS() {
         strokes = strokes.filter(s => s.id !== msg.targetId);
         redraw();
         addEvent(`↩ Undo — stroke ${(msg.targetId || '').slice(0, 8)} removed`, 'failover');
+        onLiveLogChange();
       }
 
       // ── redo ───────────────────────────────────────────────
@@ -409,6 +416,7 @@ function connectWS() {
         strokes.push(msg.data);
         drawFullStroke(msg.data);
         addEvent(`↪ Redo — stroke ${(msg.data?.id || '').slice(0, 8)} restored`, 'commit');
+        onLiveLogChange();
       }
 
       // ── clear ──────────────────────────────────────────────
@@ -416,6 +424,14 @@ function connectWS() {
         strokes = [];
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         addEvent('🗑 Canvas cleared', 'failover');
+        onLiveLogChange();
+      }
+
+      // ── snapshot (Feature 4: log compacted by leader) ──────
+      if (msg.type === 'snapshot') {
+        addEvent(`📸 Snapshot — ${msg.entriesCompacted ?? '?'} entries → 1 (${msg.canvasStateSize ?? '?'} strokes)`, 'commit');
+        updateSnapshotInfo(msg);
+        onLiveLogChange(); // refresh scrubber with new single-entry log
       }
 
       // ── cluster events (not room-scoped) ───────────────────
@@ -770,3 +786,287 @@ setInterval(() => {
 
 // Initialize room badge on load
 updateRoomBadge();
+// ═══════════════════════════════════════════════════════════════
+// FEATURE 3 — REPLAY / TIME TRAVEL (Log Audit Viewer)
+// ═══════════════════════════════════════════════════════════════
+// replayLog  : full ordered list of committed log entries from /api/full-log
+// replayIndex: the step the scrubber is currently showing (-1 = not loaded)
+// replayLive : when true the scrubber follows the live canvas in real time
+// replayOpen : whether the scrubber panel is visible
+
+let replayLog   = [];
+let replayIndex = -1;
+let replayLive  = true;
+let replayOpen  = false;
+let _replayDebounce = null;
+
+// Called by every WS event that changes the committed log (stroke, undo, redo,
+// clear, snapshot). If the scrubber is open and in LIVE mode we refresh its
+// entry list so the max step stays current. We debounce to avoid an HTTP
+// request on every single stroke during fast bursts.
+function onLiveLogChange() {
+  if (!replayOpen || !replayLive) return;
+  clearTimeout(_replayDebounce);
+  _replayDebounce = setTimeout(loadReplayLog, 250);
+}
+
+function toggleReplay() {
+  replayOpen = !replayOpen;
+  document.getElementById('replay-panel').classList.toggle('open', replayOpen);
+  document.getElementById('replay-toggle-btn').classList.toggle('active', replayOpen);
+  if (replayOpen) loadReplayLog();
+}
+
+function openReplayPanel() {
+  replayOpen = true;
+  document.getElementById('replay-panel').classList.add('open');
+  document.getElementById('replay-toggle-btn').classList.add('active');
+  loadReplayLog();
+}
+
+// Fetch the full committed log from the leader via the gateway proxy.
+async function loadReplayLog() {
+  try {
+    const r    = await fetch(`/api/full-log?room=${encodeURIComponent(currentRoom)}`);
+    const data = await r.json();
+    replayLog  = data.entries || [];
+
+    const scrubber = document.getElementById('replay-scrubber');
+    if (!scrubber) return;
+    scrubber.min = 0;
+    scrubber.max = Math.max(0, replayLog.length - 1);
+
+    if (replayLive || replayIndex < 0) {
+      // Pin to latest
+      const latest = replayLog.length > 0 ? replayLog.length - 1 : 0;
+      scrubber.value = latest;
+      replayIndex    = latest;
+    } else {
+      // Keep the scrubber at whichever step the user chose, clamping to new max
+      replayIndex    = Math.min(replayIndex, replayLog.length - 1);
+      scrubber.value = replayIndex;
+    }
+
+    updateReplayUI();
+
+    // Update snapshot info panel if leader reports a snapshot
+    if (data.snapshot) updateSnapshotInfo(data.snapshot);
+  } catch (e) {
+    addEvent('⏱ Replay log load failed: ' + e.message, 'failover');
+  }
+}
+
+// Refresh the step label and entry preview line.
+function updateReplayUI() {
+  const scrubber  = document.getElementById('replay-scrubber');
+  const stepLabel = document.getElementById('replay-step-label');
+  const preview   = document.getElementById('replay-entry-preview');
+  const liveBadge = document.getElementById('replay-live-badge');
+  const liveBtn   = document.getElementById('replay-live-btn');
+  if (!scrubber) return;
+
+  const cur   = parseInt(scrubber.value);
+  const total = replayLog.length;
+
+  stepLabel.textContent = total === 0 ? 'Log empty' : `Step ${cur + 1} / ${total}`;
+
+  const logEntry = replayLog[cur];
+  const entry    = logEntry?.entry;
+  if (entry) {
+    const t = entry.type || 'stroke';
+    const termStr = logEntry.term != null ? ` · term ${logEntry.term}` : '';
+    if (t === 'snapshot') {
+      preview.textContent = `📸 snapshot${termStr} — base canvas has ${entry.canvasState?.length ?? 0} active strokes (${entry.originalEntries ?? '?'} entries compacted)`;
+    } else if (t === 'clear') {
+      preview.textContent = `🗑  clear canvas${termStr}`;
+    } else if (t === 'cancel') {
+      preview.textContent = `↩  undo / cancel stroke ${(entry.targetId || '').slice(0, 12)}${termStr}`;
+    } else {
+      const pts = entry.path?.length ?? 0;
+      preview.textContent = `🖌  stroke ${(entry.id || '').slice(0, 12)} — ${pts} points — ${entry.color ?? '?'} · size ${entry.size ?? '?'}${termStr}`;
+    }
+  } else {
+    preview.textContent = total === 0 ? 'No committed entries yet — draw something first' : '—';
+  }
+
+  const isLive = replayLive && cur === total - 1;
+  if (isLive) {
+    liveBadge.textContent = '● LIVE';
+    liveBadge.classList.remove('paused');
+    liveBtn && liveBtn.classList.add('active');
+  } else {
+    liveBadge.textContent = `⏸ ${cur + 1}/${total}`;
+    liveBadge.classList.add('paused');
+    liveBtn && liveBtn.classList.remove('active');
+  }
+}
+
+// Wire the range input: scrubbing to any position replays the canvas.
+(function wireScubber() {
+  const scrubber = document.getElementById('replay-scrubber');
+  if (!scrubber) return;
+  scrubber.addEventListener('input', function() {
+    const idx  = parseInt(this.value);
+    replayIndex = idx;
+    replayLive  = (idx === replayLog.length - 1);
+    replayToIndex(idx);
+    updateReplayUI();
+  });
+})();
+
+// Replay the canvas from scratch up to log entry `targetIdx`.
+// Start from a snapshot base if one is present as the first entry.
+function replayToIndex(targetIdx) {
+  if (replayLog.length === 0) return;
+
+  const cancelledIds  = new Set();
+  const activeStrokes = [];
+
+  // Check whether the first log entry is a synthetic snapshot entry.
+  // If so, seed activeStrokes from its canvasState and start replay at index 1.
+  let startIdx = 0;
+  const firstEntry = replayLog[0]?.entry;
+  if (firstEntry?.type === 'snapshot' && Array.isArray(firstEntry.canvasState)) {
+    activeStrokes.push(...firstEntry.canvasState);
+    startIdx = 1;
+  }
+
+  for (let i = startIdx; i <= targetIdx && i < replayLog.length; i++) {
+    const entry = replayLog[i]?.entry;
+    if (!entry) continue;
+
+    if (entry.type === 'snapshot') {
+      // Another snapshot mid-log (unlikely but handle gracefully)
+      activeStrokes.length = 0;
+      cancelledIds.clear();
+      if (Array.isArray(entry.canvasState)) activeStrokes.push(...entry.canvasState);
+    } else if (entry.type === 'clear') {
+      activeStrokes.length = 0;
+      cancelledIds.clear();
+    } else if (entry.type === 'cancel') {
+      cancelledIds.add(entry.targetId);
+      const pos = activeStrokes.findIndex(s => s.id === entry.targetId);
+      if (pos !== -1) activeStrokes.splice(pos, 1);
+    } else if (entry.id) {
+      // New stroke or redo — ensure no duplicate
+      cancelledIds.delete(entry.id);
+      if (!activeStrokes.find(s => s.id === entry.id)) {
+        activeStrokes.push(entry);
+      }
+    }
+  }
+
+  // Paint the reconstructed state onto the canvas
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (const s of activeStrokes) drawFullStroke(s);
+}
+
+// Step the scrubber by `delta` positions (supports keyboard arrows / «/» buttons).
+function replayStep(delta) {
+  const scrubber = document.getElementById('replay-scrubber');
+  if (!scrubber || replayLog.length === 0) return;
+  const cur    = parseInt(scrubber.value);
+  const newVal = Math.max(0, Math.min(replayLog.length - 1, cur + delta));
+  scrubber.value = newVal;
+  replayIndex    = newVal;
+  replayLive     = false;
+  replayToIndex(newVal);
+  updateReplayUI();
+}
+
+// Jump back to the live (latest) state.
+function replayGoLive() {
+  replayLive  = true;
+  replayIndex = replayLog.length - 1;
+  const scrubber = document.getElementById('replay-scrubber');
+  if (scrubber) scrubber.value = replayIndex;
+  // Restore the live canvas (strokes array maintained by WS handler)
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  strokes.forEach(drawFullStroke);
+  updateReplayUI();
+}
+
+// Keyboard shortcuts for the scrubber when it's open
+document.addEventListener('keydown', e => {
+  if (!replayOpen) return;
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  if (e.key === 'ArrowLeft')  { e.preventDefault(); replayStep(-1);  }
+  if (e.key === 'ArrowRight') { e.preventDefault(); replayStep(1);   }
+  if (e.key === 'Home')       { e.preventDefault(); replayStep(-9999); }
+  if (e.key === 'End')        { e.preventDefault(); replayGoLive();  }
+  if (e.key === 'Escape')     { if (replayOpen) { toggleReplay(); replayGoLive(); } }
+});
+
+
+// ═══════════════════════════════════════════════════════════════
+// FEATURE 4 — SNAPSHOT + LOG COMPACTION
+// ═══════════════════════════════════════════════════════════════
+// takeSnapshot()       — POST /api/snapshot, compact the leader's log
+// updateSnapshotInfo() — refresh the diagnostics panel snapshot card
+// Snapshot broadcasts from the gateway arrive as msg.type === 'snapshot'
+// and are handled in the WS message handler above.
+
+async function takeSnapshot() {
+  const btn = document.querySelector('.snapshot-section .btn-teal');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Snapshotting…'; }
+  try {
+    addEvent('📸 Requesting snapshot…', 'commit');
+    const r    = await fetch('/api/snapshot', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ room: currentRoom }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      addEvent(
+        `📸 Snapshot complete — ${data.entriesCompacted} entries → ${data.newLogLength}` +
+        ` (${data.canvasStateSize} active strokes saved)`,
+        'commit'
+      );
+      updateSnapshotInfo(data);
+      // Scrubber should reload — the log now starts with a single snapshot entry
+      if (replayOpen) loadReplayLog();
+    } else {
+      addEvent(`📸 Snapshot skipped: ${data.reason || 'unknown reason'}`, 'failover');
+    }
+  } catch (e) {
+    addEvent('📸 Snapshot request failed: ' + e.message, 'failover');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📸 Take Snapshot'; }
+  }
+}
+
+// Update the snapshot card in the diagnostics panel.
+// `data` may come from the /api/snapshot response, a WS broadcast,
+// or the snapshot field inside /api/full-log.
+function updateSnapshotInfo(data) {
+  const el = document.getElementById('snapshot-info');
+  if (!el) return;
+  if (!data || (!data.ok && !data.index && !data.entriesCompacted && !data.canvasStateSize)) {
+    el.textContent = 'No snapshot yet for this room';
+    return;
+  }
+  const ts    = data.createdAt ? new Date(data.createdAt).toLocaleTimeString() : '—';
+  const compacted = data.entriesCompacted ?? '—';
+  const newLen    = data.newLogLength    ?? 1;
+  const strokes   = data.canvasStateSize ?? '—';
+  el.innerHTML =
+    `Compacted: <strong>${compacted}</strong> entries → <strong>${newLen}</strong><br>` +
+    `Active strokes saved: <strong>${strokes}</strong><br>` +
+    `Time: <strong>${ts}</strong><br>` +
+    `<span style="color:#4ADE80;font-size:0.7rem">✓ Followers catch up from snapshot in milliseconds</span>`;
+}
+
+// Poll snapshot state for the current room from cluster-status snapshots map
+// so the panel stays up to date even when the user didn't trigger the snapshot.
+setInterval(async () => {
+  if (!diagOpen) return; // only poll when panel is open
+  try {
+    const r    = await fetch('/api/cluster-status');
+    const data = await r.json();
+    const snap = data.replicas
+      ?.find(r => r.state === 'leader')
+      ?.snapshots?.[currentRoom];
+    if (snap) updateSnapshotInfo(snap);
+  } catch (_) {}
+}, 4000);

@@ -703,6 +703,48 @@ app.post('/api/blue-green/retire', async (req, res) => {
   res.json({ ok: true, retired: replica, clusterSize: REPLICAS.length });
 });
 
+// ─── SNAPSHOT API (Feature 4) ──────────────────────────────────
+// POST /api/snapshot  → forwards to the current leader's /snapshot endpoint.
+// The leader serialises the canvas state, commits it as a special log entry,
+// truncates all preceding entries, then pushes the compacted log to followers.
+app.post('/api/snapshot', async (req, res) => {
+  if (!currentLeader) await findLeader();
+  if (!currentLeader) return res.status(503).json({ error: 'No leader available' });
+
+  const roomId = normalizeRoom(req.body?.room);
+  try {
+    const r = await axios.post(`${currentLeader}/snapshot`, { room: roomId }, { timeout: 3000 });
+    if (r.data.ok) {
+      console.log(`[Gateway] 📸 Snapshot created for room "${roomId}" — ${r.data.entriesCompacted} → ${r.data.newLogLength} entries`);
+      // Broadcast snapshot event so connected clients refresh their log view
+      broadcast({ type: 'snapshot', room: roomId, ...r.data }, roomId);
+    }
+    res.json(r.data);
+  } catch (e) {
+    console.error('[Gateway] Snapshot failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── FULL LOG API (Feature 3 - time travel) ────────────────────
+// GET /api/full-log?room=xxx  → returns every committed log entry,
+// allowing the UI scrubber to replay the canvas to any past state.
+app.get('/api/full-log', async (req, res) => {
+  if (!currentLeader) await findLeader();
+  if (!currentLeader) return res.status(503).json({ error: 'No leader available' });
+
+  const roomId = normalizeRoom(req.query.room);
+  try {
+    const r = await axios.get(`${currentLeader}/full-log`, {
+      params: { room: roomId },
+      timeout: 2000,
+    });
+    res.json(r.data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── HEALTH CHECK ───────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({
